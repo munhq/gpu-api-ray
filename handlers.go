@@ -37,21 +37,25 @@ type BatchStatusResponse struct {
 const pythonEntrypointTmpl = `import json
 from vllm import LLM, SamplingParams
 
-model = {{.Model | printf "%q"}}
-prompts = json.loads({{.PromptsJSON | printf "%q"}})
-max_tokens = {{.MaxTokens}}
+def main():
+    model = {{.Model | printf "%q"}}
+    prompts = json.loads({{.PromptsJSON | printf "%q"}})
+    max_tokens = {{.MaxTokens}}
 
-llm = LLM(model=model, trust_remote_code=True)
-params = SamplingParams(max_tokens=max_tokens)
-outputs = llm.generate([p["prompt"] for p in prompts], params)
+    llm = LLM(model=model, trust_remote_code=True)
+    params = SamplingParams(max_tokens=max_tokens)
+    outputs = llm.generate([p["prompt"] for p in prompts], params)
 
-results = []
-for prompt, output in zip(prompts, outputs):
-    results.append({"prompt": prompt["prompt"], "output": output.outputs[0].text})
+    results = []
+    for prompt, output in zip(prompts, outputs):
+        results.append({"prompt": prompt["prompt"], "output": output.outputs[0].text})
 
-print("RESULTS_START")
-print(json.dumps(results))
-print("RESULTS_END")
+    print("RESULTS_START")
+    print(json.dumps(results))
+    print("RESULTS_END")
+
+if __name__ == "__main__":
+    main()
 `
 
 var entrypointTemplate = template.Must(template.New("entrypoint").Parse(pythonEntrypointTmpl))
