@@ -24,7 +24,7 @@ func NewRayClient(dashboardURL string) *RayClient {
 	}
 }
 
-// SubmitJobRequest is the payload for POST /api/v0/jobs/
+// SubmitJobRequest is the payload for POST /api/jobs/
 type SubmitJobRequest struct {
 	Entrypoint  string            `json:"entrypoint"`
 	RuntimeEnv  map[string]any    `json:"runtime_env,omitempty"`
@@ -33,12 +33,12 @@ type SubmitJobRequest struct {
 	EntrypointNumGpus float64    `json:"entrypoint_num_gpus,omitempty"`
 }
 
-// SubmitJobResponse is the response from POST /api/v0/jobs/
+// SubmitJobResponse is the response from POST /api/jobs/
 type SubmitJobResponse struct {
 	JobID string `json:"job_id"` // e.g. "raysubmit_abc123"
 }
 
-// JobStatusResponse is the response from GET /api/v0/jobs/{id}
+// JobStatusResponse is the response from GET /api/jobs/{id}
 type JobStatusResponse struct {
 	JobID     string            `json:"job_id"`
 	Status    string            `json:"status"` // PENDING, RUNNING, SUCCEEDED, FAILED, STOPPED
@@ -48,7 +48,7 @@ type JobStatusResponse struct {
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
-// JobLogsResponse is the response from GET /api/v0/jobs/{id}/logs
+// JobLogsResponse is the response from GET /api/jobs/{id}/logs
 type JobLogsResponse struct {
 	Logs string `json:"logs"`
 }
@@ -60,7 +60,7 @@ func (c *RayClient) SubmitJob(req SubmitJobRequest) (string, error) {
 		return "", fmt.Errorf("marshal submit request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(c.baseURL+"/api/v0/jobs/", "application/json", bytes.NewReader(body))
+	resp, err := c.httpClient.Post(c.baseURL+"/api/jobs/", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("submit job to Ray: %w", err)
 	}
@@ -80,7 +80,7 @@ func (c *RayClient) SubmitJob(req SubmitJobRequest) (string, error) {
 
 // GetJobStatus retrieves the status of a Ray job.
 func (c *RayClient) GetJobStatus(jobID string) (*JobStatusResponse, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/api/v0/jobs/" + jobID)
+	resp, err := c.httpClient.Get(c.baseURL + "/api/jobs/" + jobID)
 	if err != nil {
 		return nil, fmt.Errorf("get job status from Ray: %w", err)
 	}
@@ -103,7 +103,7 @@ func (c *RayClient) GetJobStatus(jobID string) (*JobStatusResponse, error) {
 
 // GetJobLogs retrieves the stdout/stderr logs of a Ray job.
 func (c *RayClient) GetJobLogs(jobID string) (string, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/api/v0/jobs/" + jobID + "/logs")
+	resp, err := c.httpClient.Get(c.baseURL + "/api/jobs/" + jobID + "/logs")
 	if err != nil {
 		return "", fmt.Errorf("get job logs from Ray: %w", err)
 	}
@@ -123,7 +123,7 @@ func (c *RayClient) GetJobLogs(jobID string) (string, error) {
 
 // Healthz pings the Ray dashboard health endpoint.
 func (c *RayClient) Healthz() error {
-	resp, err := c.httpClient.Get(c.baseURL + "/api/v0/healthz")
+	resp, err := c.httpClient.Get(c.baseURL + "/api/version")
 	if err != nil {
 		return fmt.Errorf("ray dashboard unreachable: %w", err)
 	}
