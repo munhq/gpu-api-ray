@@ -142,7 +142,7 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 		Entrypoint:        fmt.Sprintf("printf '%%s' '%s' | base64 -d > /tmp/job.py && python3 /tmp/job.py", scriptB64),
 		EntrypointNumGpus: 1,
 		RuntimeEnv: map[string]any{
-			"pip": []string{"vllm"},
+			"pip": []string{"vllm", "numpy<2.0", "scipy>=1.14"},
 			"env_vars": map[string]string{
 				"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
 				"HF_HOME":                      "/opt/models/huggingface",
