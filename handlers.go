@@ -139,7 +139,7 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 	// Base64-encode script to avoid shell escaping issues with python -c
 	scriptB64 := base64.StdEncoding.EncodeToString(scriptBuf.Bytes())
 	jobID, err := h.ray.SubmitJob(SubmitJobRequest{
-		Entrypoint:        fmt.Sprintf("echo %s | base64 -d > /tmp/job.py && python3 /tmp/job.py", scriptB64),
+		Entrypoint:        fmt.Sprintf("printf '%%s' '%s' | base64 -d > /tmp/job.py && python3 /tmp/job.py", scriptB64),
 		EntrypointNumGpus: 1,
 		RuntimeEnv: map[string]any{
 			"pip": []string{"vllm"},
