@@ -24,6 +24,7 @@ func main() {
 
 	// Public endpoints
 	mux.HandleFunc("GET /health", h.healthCheck)
+	mux.HandleFunc("GET /health/deep", h.deepHealthCheck)
 	mux.Handle("GET /metrics", promhttp.Handler())
 
 	// Authenticated endpoints

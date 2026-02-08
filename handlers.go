@@ -223,6 +223,16 @@ func (h *Handlers) getBatchStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) healthCheck(w http.ResponseWriter, r *http.Request) {
+	// Always return healthy for liveness/readiness probes.
+	// Ray dashboard reachability is informational only — we don't want
+	// a slow VPN hop to the GPU node to kill our pod.
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "healthy",
+	})
+}
+
+// deepHealthCheck includes Ray dashboard reachability (for manual debugging, not probes).
+func (h *Handlers) deepHealthCheck(w http.ResponseWriter, r *http.Request) {
 	rayStatus := "reachable"
 	if err := h.ray.Healthz(); err != nil {
 		rayStatus = fmt.Sprintf("unreachable: %v", err)
