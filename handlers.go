@@ -66,14 +66,24 @@ type entrypointData struct {
 	MaxTokens   int
 }
 
+// --- Job Client Interface ---
+
+// JobClient abstracts job submission to Ray cluster (via REST API or Kubernetes CRDs).
+type JobClient interface {
+	SubmitJob(req SubmitJobRequest) (string, error)
+	GetJobStatus(jobID string) (*JobStatusResponse, error)
+	GetJobLogs(jobID string) (string, error)
+	Healthz() error
+}
+
 // --- Handlers ---
 
 type Handlers struct {
 	cfg *Config
-	ray *RayClient
+	ray JobClient
 }
 
-func NewHandlers(cfg *Config, ray *RayClient) *Handlers {
+func NewHandlers(cfg *Config, ray JobClient) *Handlers {
 	return &Handlers{cfg: cfg, ray: ray}
 }
 
