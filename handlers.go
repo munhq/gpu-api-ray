@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -135,8 +136,10 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Submit to Ray Jobs API
+	// Base64-encode script to avoid shell escaping issues with python -c
+	scriptB64 := base64.StdEncoding.EncodeToString(scriptBuf.Bytes())
 	jobID, err := h.ray.SubmitJob(SubmitJobRequest{
-		Entrypoint:        fmt.Sprintf("python -c %q", scriptBuf.String()),
+		Entrypoint:        fmt.Sprintf("echo %s | base64 -d > /tmp/job.py && python3 /tmp/job.py", scriptB64),
 		EntrypointNumGpus: 1,
 		RuntimeEnv: map[string]any{
 			"pip": []string{"vllm"},
