@@ -17,7 +17,11 @@ func main() {
 		log.Fatalf("configuration error: %v", err)
 	}
 
-	ray := NewRayClient(cfg.RayDashboardURL)
+	// Use KubeRayClient for Kubernetes-native job submission with Kueue integration
+	ray, err := NewKubeRayClient(cfg.Namespace, cfg.RayClusterName, cfg.KueueQueueName)
+	if err != nil {
+		log.Fatalf("failed to create KubeRay client: %v", err)
+	}
 	h := NewHandlers(cfg, ray)
 
 	mux := http.NewServeMux()
@@ -45,7 +49,8 @@ func main() {
 
 	go func() {
 		log.Printf("gpu-api listening on :%s", cfg.Port)
-		log.Printf("ray dashboard: %s", cfg.RayDashboardURL)
+		log.Printf("target RayCluster: %s/%s", cfg.Namespace, cfg.RayClusterName)
+		log.Printf("kueue queue: %s", cfg.KueueQueueName)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
