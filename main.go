@@ -47,6 +47,7 @@ func main() {
 	// Authenticated endpoints
 	mux.HandleFunc("POST /v1/batches", h.apiKeyAuth(h.submitBatch))
 	mux.HandleFunc("GET /v1/batches/{job_id}", h.apiKeyAuth(h.getBatchStatus))
+	mux.HandleFunc("GET /v1/batches", h.apiKeyAuth(h.listBatches))
 	mux.HandleFunc("GET /v1/queue", h.apiKeyAuth(h.getQueueStatus))
 
 	srv := &http.Server{

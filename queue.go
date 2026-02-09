@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -160,6 +161,46 @@ func (q *JobQueue) GetJob(id string) *Job {
 	return nil
 }
 
+// ListJobs returns recent jobs, merging in-memory state with Redis.
+func (q *JobQueue) ListJobs(limit int) []*Job {
+	q.mu.Lock()
+	// Collect all in-memory jobs
+	inMemory := make(map[string]*Job, len(q.jobs))
+	for id, job := range q.jobs {
+		inMemory[id] = job
+	}
+	q.mu.Unlock()
+
+	// Start with in-memory jobs
+	seen := make(map[string]bool, len(inMemory))
+	var result []*Job
+	for _, job := range inMemory {
+		result = append(result, job)
+		seen[job.ID] = true
+	}
+
+	// Merge Redis jobs that aren't already in memory
+	if q.store != nil {
+		redisJobs := q.store.ListRecent(q.ctx, limit)
+		for _, job := range redisJobs {
+			if !seen[job.ID] {
+				result = append(result, job)
+				seen[job.ID] = true
+			}
+		}
+	}
+
+	// Sort by enqueued time descending
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].EnqueuedAt.After(result[j].EnqueuedAt)
+	})
+
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result
+}
+
 // QueueInfo returns current queue depth and active slot count.
 func (q *JobQueue) QueueInfo() (depth int, active int, max int) {
 	q.mu.Lock()
@@ -210,6 +251,8 @@ func (q *JobQueue) tryDispatch() {
 		gpusActive.Set(float64(q.activeSlots))
 		jobsSubmitted.Inc()
 		jobsActive.Inc()
+		jobsSubmittedByPriority.WithLabelValues(job.PriorityName).Inc()
+		batchSize.Observe(float64(len(job.InferenceReq.Prompts)))
 
 		log.Printf("dispatched job %s (priority=%s, waited=%.1fs, slots=%d/%d)",
 			job.ID, job.PriorityName, waitDuration, q.activeSlots, q.maxConcurrent)
@@ -237,6 +280,9 @@ func (q *JobQueue) executeJob(job *Job) {
 	duration := time.Since(start).Seconds()
 	job.CompletedAt = time.Now()
 
+	model := job.InferenceReq.Model
+	inferenceDuration.WithLabelValues(model).Observe(duration)
+
 	if err != nil {
 		job.State = JobStateFailed
 		job.Message = err.Error()
@@ -260,8 +306,13 @@ func (q *JobQueue) executeJob(job *Job) {
 		}
 		job.Results = results
 
+		// Record token metrics from vLLM response
+		tokensTotal.WithLabelValues("prompt", model).Add(float64(resp.Usage.PromptTokens))
+		tokensTotal.WithLabelValues("completion", model).Add(float64(resp.Usage.CompletionTokens))
+		tokensPerRequest.Observe(float64(resp.Usage.TotalTokens))
+
 		jobsByStatus.WithLabelValues("SUCCEEDED").Inc()
-		log.Printf("job %s SUCCEEDED in %.1fs (%d prompts)", job.ID, duration, len(resp.Choices))
+		log.Printf("job %s SUCCEEDED in %.1fs (%d prompts, %d tokens)", job.ID, duration, len(resp.Choices), resp.Usage.TotalTokens)
 	}
 
 	q.persistJob(job)

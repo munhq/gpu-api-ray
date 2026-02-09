@@ -28,7 +28,7 @@ func LoadConfig() (*Config, error) {
 		DefaultModel:     envOrDefault("DEFAULT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"),
 		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 50),
 		MaxConcurrent:    envOrDefaultInt("MAX_CONCURRENT", 4),
-		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 3600),
+		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 604800),
 	}
 
 	if cfg.APIKey == "" {

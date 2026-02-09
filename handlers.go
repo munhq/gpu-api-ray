@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 // --- Request / Response types ---
@@ -34,6 +36,20 @@ type QueueStatusResponse struct {
 	QueueDepth int `json:"queue_depth"`
 	ActiveGPUs int `json:"active_gpus"`
 	MaxGPUs    int `json:"max_gpus"`
+}
+
+type BatchListItem struct {
+	JobID       string     `json:"job_id"`
+	Status      string     `json:"status"`
+	Priority    string     `json:"priority"`
+	Model       string     `json:"model"`
+	PromptCount int        `json:"prompt_count"`
+	EnqueuedAt  time.Time  `json:"enqueued_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+type BatchListResponse struct {
+	Jobs []BatchListItem `json:"jobs"`
 }
 
 // --- Handlers ---
@@ -137,6 +153,39 @@ func (h *Handlers) getBatchStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handlers) listBatches(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	jobs := h.queue.ListJobs(limit)
+
+	items := make([]BatchListItem, 0, len(jobs))
+	for _, job := range jobs {
+		item := BatchListItem{
+			JobID:       job.ID,
+			Status:      job.State,
+			Priority:    job.PriorityName,
+			Model:       job.InferenceReq.Model,
+			PromptCount: len(job.InferenceReq.Prompts),
+			EnqueuedAt:  job.EnqueuedAt,
+		}
+		if !job.CompletedAt.IsZero() {
+			t := job.CompletedAt
+			item.CompletedAt = &t
+		}
+		items = append(items, item)
+	}
+
+	writeJSON(w, http.StatusOK, BatchListResponse{Jobs: items})
 }
 
 func (h *Handlers) getQueueStatus(w http.ResponseWriter, r *http.Request) {

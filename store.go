@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -117,6 +118,69 @@ func (s *JobStore) Load(ctx context.Context, id string) *Job {
 		StartedAt:   rec.StartedAt,
 		CompletedAt: rec.CompletedAt,
 	}
+}
+
+// ListRecent returns up to limit recent jobs from Redis using SCAN + MGET.
+func (s *JobStore) ListRecent(ctx context.Context, limit int) []*Job {
+	var keys []string
+	iter := s.client.Scan(ctx, 0, "job:*", 0).Iterator()
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+		if len(keys) >= limit*2 { // over-fetch since we'll sort and trim
+			break
+		}
+	}
+	if err := iter.Err(); err != nil {
+		log.Printf("redis SCAN error: %v", err)
+		return nil
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+
+	vals, err := s.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		log.Printf("redis MGET error: %v", err)
+		return nil
+	}
+
+	var jobs []*Job
+	for _, v := range vals {
+		str, ok := v.(string)
+		if !ok || str == "" {
+			continue
+		}
+		var rec jobRecord
+		if err := json.Unmarshal([]byte(str), &rec); err != nil {
+			continue
+		}
+		jobs = append(jobs, &Job{
+			ID:           rec.ID,
+			Priority:     rec.Priority,
+			PriorityName: rec.PriorityName,
+			State:        rec.State,
+			InferenceReq: InferenceRequest{
+				Model:     rec.Model,
+				Prompts:   rec.Prompts,
+				MaxTokens: rec.MaxTokens,
+			},
+			Results:     rec.Results,
+			Message:     rec.Message,
+			EnqueuedAt:  rec.EnqueuedAt,
+			StartedAt:   rec.StartedAt,
+			CompletedAt: rec.CompletedAt,
+		})
+	}
+
+	// Sort by enqueued time descending (most recent first)
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].EnqueuedAt.After(jobs[j].EnqueuedAt)
+	})
+
+	if len(jobs) > limit {
+		jobs = jobs[:limit]
+	}
+	return jobs
 }
 
 // Close shuts down the Redis connection.
