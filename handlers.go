@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -99,8 +100,8 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 	if maxTokens <= 0 {
 		maxTokens = h.cfg.DefaultMaxTokens
 	}
-	if maxTokens > 4096 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "max_tokens must be between 1 and 4096"})
+	if maxTokens > h.cfg.MaxMaxTokens {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("max_tokens must be between 1 and %d", h.cfg.MaxMaxTokens)})
 		return
 	}
 	priority := req.Priority
@@ -263,7 +264,7 @@ func (h *Handlers) apiKeyAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing X-API-Key header"})
 			return
 		}
-		if key != h.cfg.APIKey {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(h.cfg.APIKey)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid API key"})
 			return
 		}
