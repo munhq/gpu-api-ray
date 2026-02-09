@@ -9,13 +9,11 @@ import (
 type Config struct {
 	Port             string
 	APIKey           string
-	RayDashboardURL  string // Deprecated: kept for backward compat
+	RayDashboardURL  string
 	DefaultModel     string
 	DefaultMaxTokens int
-	Namespace        string
-	RayClusterName   string
-	KueueQueueName   string
 	JobTTLSeconds    int
+	MaxGPUs          int
 }
 
 func LoadConfig() (*Config, error) {
@@ -25,10 +23,8 @@ func LoadConfig() (*Config, error) {
 		RayDashboardURL:  envOrDefault("RAY_DASHBOARD_URL", "http://raycluster-batch-inference-head-svc:8265"),
 		DefaultModel:     envOrDefault("DEFAULT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"),
 		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 50),
-		Namespace:        envOrDefault("NAMESPACE", "gpu-workloads"),
-		RayClusterName:   envOrDefault("RAY_CLUSTER_NAME", "raycluster-batch-inference"),
-		KueueQueueName:   envOrDefault("KUEUE_QUEUE_NAME", "user-queue"),
 		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 3600),
+		MaxGPUs:          envOrDefaultInt("MAX_GPUS", 4),
 	}
 
 	if cfg.APIKey == "" {

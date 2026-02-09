@@ -21,15 +21,23 @@ type BatchRequest struct {
 }
 
 type BatchSubmitResponse struct {
-	JobID  string `json:"job_id"`
-	Status string `json:"status"`
+	JobID    string `json:"job_id"`
+	Status   string `json:"status"`
+	Priority string `json:"priority"`
 }
 
 type BatchStatusResponse struct {
-	JobID   string              `json:"job_id"`
-	Status  string              `json:"status"`
-	Results []map[string]string `json:"results,omitempty"`
-	Message string              `json:"message,omitempty"`
+	JobID    string              `json:"job_id"`
+	Status   string              `json:"status"`
+	Priority string              `json:"priority,omitempty"`
+	Results  []map[string]string `json:"results,omitempty"`
+	Message  string              `json:"message,omitempty"`
+}
+
+type QueueStatusResponse struct {
+	QueueDepth int `json:"queue_depth"`
+	ActiveGPUs int `json:"active_gpus"`
+	MaxGPUs    int `json:"max_gpus"`
 }
 
 // --- Python entrypoint template ---
@@ -79,12 +87,13 @@ type JobClient interface {
 // --- Handlers ---
 
 type Handlers struct {
-	cfg *Config
-	ray JobClient
+	cfg   *Config
+	ray   JobClient
+	queue *JobQueue
 }
 
-func NewHandlers(cfg *Config, ray JobClient) *Handlers {
-	return &Handlers{cfg: cfg, ray: ray}
+func NewHandlers(cfg *Config, ray JobClient, queue *JobQueue) *Handlers {
+	return &Handlers{cfg: cfg, ray: ray, queue: queue}
 }
 
 func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
@@ -149,10 +158,9 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Submit to Ray Jobs API
-	// Base64-encode script to avoid shell escaping issues with python -c
+	// Enqueue job — the dispatcher will submit to Ray when a GPU slot is available
 	scriptB64 := base64.StdEncoding.EncodeToString(scriptBuf.Bytes())
-	jobID, err := h.ray.SubmitJob(SubmitJobRequest{
+	job := h.queue.Enqueue(SubmitJobRequest{
 		Entrypoint:        fmt.Sprintf("printf '%%s' '%s' | base64 -d > /tmp/job.py && python3 /tmp/job.py", scriptB64),
 		EntrypointNumGpus: 1,
 		RuntimeEnv: map[string]any{
@@ -167,21 +175,14 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 			"model":    model,
 			"priority": priority,
 		},
-	})
-	if err != nil {
-		log.Printf("failed to submit job to Ray: %v", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("failed to submit job: %v", err)})
-		return
-	}
+	}, priority)
 
-	jobsSubmitted.Inc()
-	jobsActive.Inc()
+	log.Printf("enqueued job %s (model=%s, prompts=%d, priority=%s)", job.ID, model, len(req.Input), priority)
 
-	log.Printf("submitted job %s (model=%s, prompts=%d, priority=%s)", jobID, model, len(req.Input), priority)
-
-	writeJSON(w, http.StatusOK, BatchSubmitResponse{
-		JobID:  jobID,
-		Status: "PENDING",
+	writeJSON(w, http.StatusAccepted, BatchSubmitResponse{
+		JobID:    job.ID,
+		Status:   job.State,
+		Priority: priority,
 	})
 }
 
@@ -192,51 +193,30 @@ func (h *Handlers) getBatchStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := h.ray.GetJobStatus(jobID)
-	if err != nil {
-		log.Printf("failed to get job status for %s: %v", jobID, err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("failed to get job status: %v", err)})
-		return
-	}
-	if status == nil {
+	job := h.queue.GetJob(jobID)
+	if job == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "job not found"})
 		return
 	}
 
 	resp := BatchStatusResponse{
-		JobID:   jobID,
-		Status:  status.Status,
-		Message: status.Message,
-	}
-
-	// If succeeded, extract results from logs
-	if status.Status == "SUCCEEDED" {
-		jobsByStatus.WithLabelValues("SUCCEEDED").Inc()
-		jobsActive.Dec()
-
-		if status.StartTime > 0 && status.EndTime > 0 {
-			dur := float64(status.EndTime-status.StartTime) / 1000.0
-			jobDuration.Observe(dur)
-		}
-
-		logs, err := h.ray.GetJobLogs(jobID)
-		if err != nil {
-			log.Printf("failed to get logs for job %s: %v", jobID, err)
-			resp.Message = "Job succeeded but failed to retrieve results."
-		} else {
-			results := extractResults(logs)
-			if results != nil {
-				resp.Results = results
-			} else {
-				resp.Message = "Job succeeded but results could not be parsed from logs."
-			}
-		}
-	} else if status.Status == "FAILED" || status.Status == "STOPPED" {
-		jobsByStatus.WithLabelValues(status.Status).Inc()
-		jobsActive.Dec()
+		JobID:    jobID,
+		Status:   job.State,
+		Priority: job.PriorityName,
+		Message:  job.Message,
+		Results:  job.Results,
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handlers) getQueueStatus(w http.ResponseWriter, r *http.Request) {
+	depth, active, maxGPUs := h.queue.QueueInfo()
+	writeJSON(w, http.StatusOK, QueueStatusResponse{
+		QueueDepth: depth,
+		ActiveGPUs: active,
+		MaxGPUs:    maxGPUs,
+	})
 }
 
 func (h *Handlers) healthCheck(w http.ResponseWriter, r *http.Request) {
