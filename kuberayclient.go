@@ -90,6 +90,9 @@ func (c *KubeRayClient) SubmitJob(req SubmitJobRequest) (string, error) {
 		return "", fmt.Errorf("failed to build runtime_env: %w", err)
 	}
 
+	// Sanitize model name for use in labels (replace / with -)
+	modelLabel := strings.ReplaceAll(req.Metadata["model"], "/", "-")
+
 	// Create RayJob CRD
 	rayJob := &rayv1.RayJob{
 		ObjectMeta: metav1.ObjectMeta{
@@ -98,7 +101,7 @@ func (c *KubeRayClient) SubmitJob(req SubmitJobRequest) (string, error) {
 			Labels: map[string]string{
 				"kueue.x-k8s.io/queue-name": c.queueName,
 				"app":                       "gpu-api",
-				"model":                     req.Metadata["model"],
+				"model":                     modelLabel,
 			},
 		},
 		Spec: rayv1.RayJobSpec{
