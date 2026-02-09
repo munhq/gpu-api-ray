@@ -110,8 +110,8 @@ func (c *KubeRayClient) SubmitJob(req SubmitJobRequest) (string, error) {
 			ClusterSelector: map[string]string{
 				"ray.io/cluster": c.clusterName,
 			},
-			ShutdownAfterJobFinishes: false, // Keep job for log retrieval
-			TTLSecondsAfterFinished: 3600, // Clean up after 1 hour
+			ShutdownAfterJobFinishes: true, // Required for Kueue suspend/resume
+			TTLSecondsAfterFinished: 3600, // Keep submitter pod for 1 hour for log retrieval
 			SubmitterPodTemplate: &corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
