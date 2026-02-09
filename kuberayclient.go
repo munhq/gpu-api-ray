@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -224,7 +225,7 @@ func (c *KubeRayClient) GetJobLogs(jobID string) (string, error) {
 	defer logs.Close()
 
 	var buf strings.Builder
-	if _, err := buf.ReadFrom(logs); err != nil {
+	if _, err := io.Copy(&buf, logs); err != nil {
 		return "", fmt.Errorf("failed to read logs: %w", err)
 	}
 
