@@ -13,11 +13,9 @@ import (
 // Job states
 const (
 	JobStateQueued    = "QUEUED"
-	JobStateSubmitted = "SUBMITTED"
 	JobStateRunning   = "RUNNING"
 	JobStateSucceeded = "SUCCEEDED"
 	JobStateFailed    = "FAILED"
-	JobStateStopped   = "STOPPED"
 )
 
 // Priority values — higher runs first
@@ -44,12 +42,11 @@ type Job struct {
 	Priority     int
 	PriorityName string
 	State        string
-	SubmitReq    SubmitJobRequest
-	RayJobID     string // set once submitted to Ray
+	InferenceReq InferenceRequest
 	Results      []map[string]string
 	Message      string
 	EnqueuedAt   time.Time
-	SubmittedAt  time.Time
+	StartedAt    time.Time
 	CompletedAt  time.Time
 
 	// heap bookkeeping
@@ -86,7 +83,7 @@ func (h *jobHeap) Pop() any {
 	old := *h
 	n := len(old)
 	job := old[n-1]
-	old[n-1] = nil // avoid memory leak
+	old[n-1] = nil
 	job.index = -1
 	*h = old[:n-1]
 	return job
@@ -95,31 +92,32 @@ func (h *jobHeap) Pop() any {
 // --- JobQueue ---
 
 type JobQueue struct {
-	mu         sync.Mutex
-	ray        JobClient
-	maxGPUs    int
-	activeGPUs int
-	seqCounter int
-	pq         jobHeap
-	jobs       map[string]*Job // all jobs by ID (queued + active + terminal)
-	dispatch   chan struct{}    // signal to attempt dispatch
+	mu            sync.Mutex
+	ray           *RayClient
+	maxConcurrent int
+	activeSlots   int
+	seqCounter    int
+	pq            jobHeap
+	jobs          map[string]*Job
+	dispatch      chan struct{}
+	ctx           context.Context
 }
 
-func NewJobQueue(ray JobClient, maxGPUs int) *JobQueue {
+func NewJobQueue(ray *RayClient, maxConcurrent int) *JobQueue {
 	q := &JobQueue{
-		ray:      ray,
-		maxGPUs:  maxGPUs,
-		pq:       make(jobHeap, 0),
-		jobs:     make(map[string]*Job),
-		dispatch: make(chan struct{}, 1),
+		ray:           ray,
+		maxConcurrent: maxConcurrent,
+		pq:            make(jobHeap, 0),
+		jobs:          make(map[string]*Job),
+		dispatch:      make(chan struct{}, 1),
 	}
 	heap.Init(&q.pq)
-	gpusTotal.Set(float64(maxGPUs))
+	gpusTotal.Set(float64(maxConcurrent))
 	return q
 }
 
 // Enqueue adds a job to the priority queue and signals the dispatcher.
-func (q *JobQueue) Enqueue(req SubmitJobRequest, priority string) *Job {
+func (q *JobQueue) Enqueue(req InferenceRequest, priority string) *Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -128,7 +126,7 @@ func (q *JobQueue) Enqueue(req SubmitJobRequest, priority string) *Job {
 		Priority:     parsePriority(priority),
 		PriorityName: priority,
 		State:        JobStateQueued,
-		SubmitReq:    req,
+		InferenceReq: req,
 		EnqueuedAt:   time.Now(),
 		seqNum:       q.seqCounter,
 	}
@@ -142,37 +140,34 @@ func (q *JobQueue) Enqueue(req SubmitJobRequest, priority string) *Job {
 	return job
 }
 
-// GetJob returns a snapshot of the job state. Returns nil if not found.
+// GetJob returns the job state. Returns nil if not found.
 func (q *JobQueue) GetJob(id string) *Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.jobs[id]
 }
 
-// QueueInfo returns current queue depth and active GPU count.
-func (q *JobQueue) QueueInfo() (depth int, active int, maxGPUs int) {
+// QueueInfo returns current queue depth and active slot count.
+func (q *JobQueue) QueueInfo() (depth int, active int, max int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.pq.Len(), q.activeGPUs, q.maxGPUs
+	return q.pq.Len(), q.activeSlots, q.maxConcurrent
 }
 
-// Start launches the dispatcher and reconciler goroutines.
-// They run until ctx is cancelled.
+// Start launches the dispatcher goroutine. Runs until ctx is cancelled.
 func (q *JobQueue) Start(ctx context.Context) {
+	q.ctx = ctx
 	go q.dispatchLoop(ctx)
-	go q.reconcileLoop(ctx)
-	log.Printf("queue started: max_gpus=%d", q.maxGPUs)
+	log.Printf("queue started: max_concurrent=%d", q.maxConcurrent)
 }
 
 func (q *JobQueue) signalDispatch() {
 	select {
 	case q.dispatch <- struct{}{}:
 	default:
-		// already signalled
 	}
 }
 
-// dispatchLoop dequeues highest-priority jobs whenever GPU slots are available.
 func (q *JobQueue) dispatchLoop(ctx context.Context) {
 	for {
 		select {
@@ -188,135 +183,77 @@ func (q *JobQueue) tryDispatch() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	for q.activeGPUs < q.maxGPUs && q.pq.Len() > 0 {
+	for q.activeSlots < q.maxConcurrent && q.pq.Len() > 0 {
 		job := heap.Pop(&q.pq).(*Job)
 		queueDepth.Set(float64(q.pq.Len()))
 
 		waitDuration := time.Since(job.EnqueuedAt).Seconds()
 		queueWaitSeconds.Observe(waitDuration)
 
-		// Submit to Ray outside of the lock would be better for latency,
-		// but keeping it simple — Ray submit is fast (HTTP POST).
-		rayJobID, err := q.ray.SubmitJob(job.SubmitReq)
-		if err != nil {
-			log.Printf("failed to submit job %s to Ray: %v", job.ID, err)
-			job.State = JobStateFailed
-			job.Message = "failed to submit to Ray: " + err.Error()
-			job.CompletedAt = time.Now()
-			jobsByStatus.WithLabelValues("FAILED").Inc()
-			continue
-		}
+		job.State = JobStateRunning
+		job.StartedAt = time.Now()
+		q.activeSlots++
 
-		job.RayJobID = rayJobID
-		job.State = JobStateSubmitted
-		job.SubmittedAt = time.Now()
-		q.activeGPUs++
-
-		gpusActive.Set(float64(q.activeGPUs))
+		gpusActive.Set(float64(q.activeSlots))
 		jobsSubmitted.Inc()
 		jobsActive.Inc()
 
-		log.Printf("dispatched job %s → Ray %s (priority=%s, waited=%.1fs, gpus=%d/%d)",
-			job.ID, rayJobID, job.PriorityName, waitDuration, q.activeGPUs, q.maxGPUs)
+		log.Printf("dispatched job %s (priority=%s, waited=%.1fs, slots=%d/%d)",
+			job.ID, job.PriorityName, waitDuration, q.activeSlots, q.maxConcurrent)
+
+		// Execute inference in a goroutine — HTTP call blocks until vLLM responds
+		go q.executeJob(job)
 	}
 }
 
-// reconcileLoop polls Ray for active job statuses and frees GPU slots on completion.
-func (q *JobQueue) reconcileLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+// executeJob sends the inference request to vLLM and updates the job state.
+func (q *JobQueue) executeJob(job *Job) {
+	start := time.Now()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			q.reconcile()
-		}
-	}
-}
+	resp, err := q.ray.Complete(q.ctx, CompletionRequest{
+		Model:     job.InferenceReq.Model,
+		Prompt:    job.InferenceReq.Prompts,
+		MaxTokens: job.InferenceReq.MaxTokens,
+	})
 
-func (q *JobQueue) reconcile() {
 	q.mu.Lock()
-	// Collect jobs that need status checks
-	var active []*Job
-	for _, job := range q.jobs {
-		if job.State == JobStateSubmitted || job.State == JobStateRunning {
-			active = append(active, job)
-		}
-	}
-	q.mu.Unlock()
+	defer q.mu.Unlock()
 
-	if len(active) == 0 {
-		return
-	}
+	duration := time.Since(start).Seconds()
+	job.CompletedAt = time.Now()
 
-	freedSlots := 0
+	if err != nil {
+		job.State = JobStateFailed
+		job.Message = err.Error()
+		jobsByStatus.WithLabelValues("FAILED").Inc()
+		log.Printf("job %s FAILED after %.1fs: %v", job.ID, duration, err)
+	} else {
+		job.State = JobStateSucceeded
+		job.Message = "completed"
 
-	for _, job := range active {
-		status, err := q.ray.GetJobStatus(job.RayJobID)
-		if err != nil {
-			log.Printf("reconcile: failed to get status for job %s (ray=%s): %v", job.ID, job.RayJobID, err)
-			continue
-		}
-		if status == nil {
-			continue
-		}
-
-		q.mu.Lock()
-		switch status.Status {
-		case "RUNNING":
-			if job.State != JobStateRunning {
-				job.State = JobStateRunning
-				log.Printf("job %s (ray=%s) now RUNNING", job.ID, job.RayJobID)
+		// Convert vLLM response to our results format (prompt + output pairs)
+		results := make([]map[string]string, len(resp.Choices))
+		for _, choice := range resp.Choices {
+			prompt := ""
+			if choice.Index < len(job.InferenceReq.Prompts) {
+				prompt = job.InferenceReq.Prompts[choice.Index]
 			}
-		case "SUCCEEDED":
-			job.State = JobStateSucceeded
-			job.CompletedAt = time.Now()
-			job.Message = status.Message
-
-			// Cache results from logs
-			logs, err := q.ray.GetJobLogs(job.RayJobID)
-			if err != nil {
-				log.Printf("reconcile: failed to get logs for job %s: %v", job.ID, err)
-				job.Message = "Job succeeded but failed to retrieve results."
-			} else {
-				results := extractResults(logs)
-				if results != nil {
-					job.Results = results
-				} else {
-					job.Message = "Job succeeded but results could not be parsed from logs."
-				}
+			results[choice.Index] = map[string]string{
+				"prompt": prompt,
+				"output": choice.Text,
 			}
-
-			if status.StartTime > 0 && status.EndTime > 0 {
-				dur := float64(status.EndTime-status.StartTime) / 1000.0
-				jobDuration.Observe(dur)
-			}
-
-			q.activeGPUs--
-			freedSlots++
-			jobsByStatus.WithLabelValues("SUCCEEDED").Inc()
-			jobsActive.Dec()
-			log.Printf("job %s (ray=%s) SUCCEEDED, freed GPU slot (%d/%d active)",
-				job.ID, job.RayJobID, q.activeGPUs, q.maxGPUs)
-
-		case "FAILED", "STOPPED":
-			job.State = status.Status
-			job.CompletedAt = time.Now()
-			job.Message = status.Message
-			q.activeGPUs--
-			freedSlots++
-			jobsByStatus.WithLabelValues(status.Status).Inc()
-			jobsActive.Dec()
-			log.Printf("job %s (ray=%s) %s, freed GPU slot (%d/%d active)",
-				job.ID, job.RayJobID, status.Status, q.activeGPUs, q.maxGPUs)
 		}
-		q.mu.Unlock()
+		job.Results = results
+
+		jobsByStatus.WithLabelValues("SUCCEEDED").Inc()
+		log.Printf("job %s SUCCEEDED in %.1fs (%d prompts)", job.ID, duration, len(resp.Choices))
 	}
 
-	if freedSlots > 0 {
-		gpusActive.Set(float64(q.activeGPUs))
-		q.signalDispatch()
-	}
+	jobDuration.Observe(duration)
+	q.activeSlots--
+	gpusActive.Set(float64(q.activeSlots))
+	jobsActive.Dec()
+
+	// Signal dispatcher to pick up next queued job
+	q.signalDispatch()
 }

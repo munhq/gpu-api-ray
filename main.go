@@ -18,13 +18,30 @@ func main() {
 	}
 
 	ray := NewRayClient(cfg.RayDashboardURL)
-	queue := NewJobQueue(ray, cfg.MaxGPUs)
+
+	// Deploy vLLM Ray Serve application if not already running
+	if ray.IsServeReady() {
+		log.Println("vLLM serve app already deployed and running")
+	} else {
+		log.Printf("deploying vLLM serve app (model=%s)...", cfg.VLLMModel)
+		if err := ray.DeployServeApp(cfg.VLLMModel); err != nil {
+			log.Fatalf("failed to deploy vLLM serve app: %v", err)
+		}
+	}
+
+	// Wait for serve endpoint to be ready
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer startupCancel()
+	if err := ray.WaitForServeReady(startupCtx); err != nil {
+		log.Fatalf("vLLM serve not ready: %v", err)
+	}
+
+	queue := NewJobQueue(ray, cfg.MaxConcurrent)
 
 	// Graceful shutdown context
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start dispatcher + reconciler goroutines
 	queue.Start(ctx)
 
 	h := NewHandlers(cfg, ray, queue)
@@ -45,14 +62,15 @@ func main() {
 		Addr:         ":" + cfg.Port,
 		Handler:      metricsMiddleware(mux),
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 5 * time.Minute, // allow long inference responses
 		IdleTimeout:  60 * time.Second,
 	}
 
 	go func() {
 		log.Printf("gpu-api listening on :%s", cfg.Port)
 		log.Printf("ray dashboard: %s", cfg.RayDashboardURL)
-		log.Printf("max GPUs: %d", cfg.MaxGPUs)
+		log.Printf("vLLM model: %s", cfg.VLLMModel)
+		log.Printf("max concurrent: %d", cfg.MaxConcurrent)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -61,7 +79,7 @@ func main() {
 	<-ctx.Done()
 	log.Println("shutting down...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {

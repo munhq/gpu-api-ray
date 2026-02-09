@@ -23,7 +23,7 @@ var (
 
 	jobsSubmitted = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "gpu_api_jobs_submitted_total",
-		Help: "Total number of jobs submitted to Ray.",
+		Help: "Total number of jobs dispatched to vLLM.",
 	})
 
 	jobsActive = promauto.NewGauge(prometheus.GaugeOpts{
@@ -39,7 +39,7 @@ var (
 	jobDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "gpu_api_job_duration_seconds",
 		Help:    "Time from job submission to completion as observed by status checks.",
-		Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
+		Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60},
 	})
 
 	queueDepth = promauto.NewGauge(prometheus.GaugeOpts{
@@ -49,17 +49,17 @@ var (
 
 	gpusActive = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "gpu_api_gpus_active",
-		Help: "Number of GPUs currently in use by running jobs.",
+		Help: "Number of concurrent inference slots in use.",
 	})
 
 	gpusTotal = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "gpu_api_gpus_total",
-		Help: "Total GPU slots configured (max concurrent jobs).",
+		Help: "Total concurrent inference slots configured.",
 	})
 
 	queueWaitSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "gpu_api_queue_wait_seconds",
-		Help:    "Time from enqueue to submission to Ray.",
+		Help:    "Time from enqueue to dispatch to vLLM.",
 		Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300, 600},
 	})
 )
