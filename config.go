@@ -83,8 +83,8 @@ func validateConfig(cfg *Config) error {
 	if cfg.DefaultMaxTokens < 1 || cfg.DefaultMaxTokens > cfg.MaxMaxTokens {
 		return fmt.Errorf("DEFAULT_MAX_TOKENS must be between 1 and %d (MAX_MAX_TOKENS), got: %d", cfg.MaxMaxTokens, cfg.DefaultMaxTokens)
 	}
-	if cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 100 {
-		return fmt.Errorf("MAX_CONCURRENT must be between 1 and 100, got: %d", cfg.MaxConcurrent)
+	if cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 1000 {
+		return fmt.Errorf("MAX_CONCURRENT must be between 1 and 1000, got: %d", cfg.MaxConcurrent)
 	}
 	if cfg.JobTTLSeconds < 3600 || cfg.JobTTLSeconds > 2592000 { // 1 hour to 30 days
 		return fmt.Errorf("JOB_TTL_SECONDS must be between 3600 and 2592000, got: %d", cfg.JobTTLSeconds)
