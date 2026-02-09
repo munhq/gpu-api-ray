@@ -159,8 +159,8 @@ func (h *Handlers) listBatches(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > 10000 {
+		limit = 10000
 	}
 
 	jobs := h.queue.ListJobs(limit)
