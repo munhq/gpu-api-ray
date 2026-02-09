@@ -36,9 +36,17 @@ type CompletionRequest struct {
 	MaxTokens int      `json:"max_tokens"`
 }
 
+// CompletionUsage contains token usage information from vLLM.
+type CompletionUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // CompletionResponse from the Ray Serve vLLM endpoint.
 type CompletionResponse struct {
 	Choices []CompletionChoice `json:"choices"`
+	Usage   CompletionUsage    `json:"usage"`
 }
 
 type CompletionChoice struct {

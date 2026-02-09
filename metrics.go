@@ -62,6 +62,34 @@ var (
 		Help:    "Time from enqueue to dispatch to vLLM.",
 		Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300, 600},
 	})
+
+	tokensTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gpu_api_tokens_total",
+		Help: "Total tokens processed by type (prompt/completion) and model.",
+	}, []string{"type", "model"})
+
+	tokensPerRequest = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "gpu_api_tokens_per_request",
+		Help:    "Total tokens per job request.",
+		Buckets: []float64{10, 50, 100, 250, 500, 1000, 2000, 4000, 8000},
+	})
+
+	inferenceDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "gpu_api_inference_duration_seconds",
+		Help:    "vLLM HTTP call latency in seconds (inference only, excludes queue wait).",
+		Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300},
+	}, []string{"model"})
+
+	batchSize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "gpu_api_batch_size",
+		Help:    "Number of prompts per batch job.",
+		Buckets: []float64{1, 2, 5, 10, 20, 50, 100},
+	})
+
+	jobsSubmittedByPriority = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gpu_api_jobs_submitted_by_priority_total",
+		Help: "Total jobs submitted broken down by priority level.",
+	}, []string{"priority"})
 )
 
 type statusRecorder struct {
