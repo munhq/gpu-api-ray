@@ -44,6 +44,20 @@ func main() {
 
 	queue.Start(ctx)
 
+	// Background reconciler: redeploy vLLM serve if head restarts
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ray.EnsureServeApp(cfg.VLLMModel)
+			}
+		}
+	}()
+
 	h := NewHandlers(cfg, ray, queue)
 
 	mux := http.NewServeMux()

@@ -231,6 +231,18 @@ func (c *RayClient) WaitForServeReady(ctx context.Context) error {
 	return fmt.Errorf("vLLM serve endpoint not ready after 5 minutes")
 }
 
+// EnsureServeApp checks if vLLM serve is running and redeploys if not.
+// Safe to call repeatedly — no-op if already healthy.
+func (c *RayClient) EnsureServeApp(model string) {
+	if c.IsServeReady() {
+		return
+	}
+	log.Println("vLLM serve app not running, redeploying...")
+	if err := c.DeployServeApp(model); err != nil {
+		log.Printf("failed to redeploy vLLM serve app: %v", err)
+	}
+}
+
 // Complete sends a batch completion request to the vLLM serve endpoint.
 func (c *RayClient) Complete(ctx context.Context, req CompletionRequest) (*CompletionResponse, error) {
 	body, err := json.Marshal(req)
