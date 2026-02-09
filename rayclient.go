@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
 )
@@ -61,35 +62,60 @@ type InferenceRequest struct {
 	MaxTokens int
 }
 
-// Complete sends a batch completion request to the vLLM serve endpoint.
+// Complete sends a batch completion request to the vLLM serve endpoint with retry logic.
 func (c *RayClient) Complete(ctx context.Context, req CompletionRequest) (*CompletionResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal completion request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.serveURL+"/v1/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create completion request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	const maxRetries = 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 1s, 2s, 4s
+			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * time.Second
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
 
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("send completion request to vLLM: %w", err)
-	}
-	defer resp.Body.Close()
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.serveURL+"/v1/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create completion request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	if resp.StatusCode != http.StatusOK {
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			if attempt == maxRetries {
+				return nil, fmt.Errorf("send completion request to vLLM (after %d retries): %w", maxRetries, err)
+			}
+			continue // Retry on network errors
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			var result CompletionResponse
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return nil, fmt.Errorf("decode completion response: %w", err)
+			}
+			return &result, nil
+		}
+
+		// Read error response
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("vLLM returned %d: %s", resp.StatusCode, string(b))
+		errMsg := fmt.Sprintf("vLLM returned %d: %s", resp.StatusCode, string(b))
+
+		// Retry on server errors (5xx) but not client errors (4xx)
+		if resp.StatusCode >= 500 && attempt < maxRetries {
+			continue
+		}
+		return nil, fmt.Errorf(errMsg)
 	}
 
-	var result CompletionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode completion response: %w", err)
-	}
-	return &result, nil
+	return nil, fmt.Errorf("unreachable code")
 }
 
 // ServeHealthz checks if the vLLM serve endpoint is reachable.

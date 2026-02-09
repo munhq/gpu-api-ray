@@ -183,6 +183,11 @@ func (s *JobStore) ListRecent(ctx context.Context, limit int) []*Job {
 	return jobs
 }
 
+// Healthz checks if Redis is reachable.
+func (s *JobStore) Healthz(ctx context.Context) error {
+	return s.client.Ping(ctx).Err()
+}
+
 // Close shuts down the Redis connection.
 func (s *JobStore) Close() error {
 	return s.client.Close()

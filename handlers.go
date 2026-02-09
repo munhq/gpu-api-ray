@@ -226,10 +226,31 @@ func (h *Handlers) deepHealthCheck(w http.ResponseWriter, r *http.Request) {
 		serveStatus = fmt.Sprintf("not ready: %v", err)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":        "healthy",
+	redisStatus := "not configured"
+	if h.queue.store != nil {
+		if err := h.queue.store.Healthz(r.Context()); err != nil {
+			redisStatus = fmt.Sprintf("unhealthy: %v", err)
+		} else {
+			redisStatus = "healthy"
+		}
+	}
+
+	// Overall status is unhealthy if any critical component is down
+	overallStatus := "healthy"
+	if rayStatus != "reachable" || serveStatus != "ready" {
+		overallStatus = "degraded"
+	}
+
+	statusCode := http.StatusOK
+	if overallStatus == "degraded" {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	writeJSON(w, statusCode, map[string]string{
+		"status":        overallStatus,
 		"ray_dashboard": rayStatus,
 		"vllm_serve":    serveStatus,
+		"redis":         redisStatus,
 	})
 }
 
