@@ -43,11 +43,11 @@ func main() {
 	mux.HandleFunc("GET /health", h.healthCheck)
 	mux.HandleFunc("GET /health/deep", h.deepHealthCheck)
 	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /v1/batches", h.listBatches) // unauthenticated: read-only, cluster-internal
 
 	// Authenticated endpoints
 	mux.HandleFunc("POST /v1/batches", h.apiKeyAuth(h.submitBatch))
 	mux.HandleFunc("GET /v1/batches/{job_id}", h.apiKeyAuth(h.getBatchStatus))
-	mux.HandleFunc("GET /v1/batches", h.apiKeyAuth(h.listBatches))
 	mux.HandleFunc("GET /v1/queue", h.apiKeyAuth(h.getQueueStatus))
 
 	srv := &http.Server{

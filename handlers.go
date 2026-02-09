@@ -39,13 +39,16 @@ type QueueStatusResponse struct {
 }
 
 type BatchListItem struct {
-	JobID       string     `json:"job_id"`
-	Status      string     `json:"status"`
-	Priority    string     `json:"priority"`
-	Model       string     `json:"model"`
-	PromptCount int        `json:"prompt_count"`
-	EnqueuedAt  time.Time  `json:"enqueued_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	JobID           string     `json:"job_id"`
+	Status          string     `json:"status"`
+	Priority        string     `json:"priority"`
+	Model           string     `json:"model"`
+	PromptCount     int        `json:"prompt_count"`
+	DurationSeconds float64    `json:"duration_seconds"`
+	Message         string     `json:"message,omitempty"`
+	EnqueuedAt      time.Time  `json:"enqueued_at"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
 type BatchListResponse struct {
@@ -176,11 +179,20 @@ func (h *Handlers) listBatches(w http.ResponseWriter, r *http.Request) {
 			Priority:    job.PriorityName,
 			Model:       job.InferenceReq.Model,
 			PromptCount: len(job.InferenceReq.Prompts),
+			Message:     job.Message,
 			EnqueuedAt:  job.EnqueuedAt,
+		}
+		if !job.StartedAt.IsZero() {
+			t := job.StartedAt
+			item.StartedAt = &t
 		}
 		if !job.CompletedAt.IsZero() {
 			t := job.CompletedAt
 			item.CompletedAt = &t
+			item.DurationSeconds = job.CompletedAt.Sub(job.StartedAt).Seconds()
+		} else if !job.StartedAt.IsZero() {
+			// Still running — duration is time since start
+			item.DurationSeconds = time.Since(job.StartedAt).Seconds()
 		}
 		items = append(items, item)
 	}
