@@ -108,7 +108,7 @@ func (c *KubeRayClient) SubmitJob(req SubmitJobRequest) (string, error) {
 				"ray.io/cluster": c.clusterName,
 			},
 			ShutdownAfterJobFinishes: false, // Keep job for log retrieval
-			TTLSecondsAfterFinished: intPtr(3600), // Clean up after 1 hour
+			TTLSecondsAfterFinished: 3600, // Clean up after 1 hour
 			SubmitterPodTemplate: &corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
@@ -284,8 +284,4 @@ func getPriorityFromClass(className string) string {
 	default:
 		return "medium"
 	}
-}
-
-func intPtr(i int32) *int32 {
-	return &i
 }
