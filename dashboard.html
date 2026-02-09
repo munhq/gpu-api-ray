@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU API Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.3); }
+        }
+        .pulse-dot {
+            animation: pulse-dot 1.5s ease-in-out infinite;
+        }
+        .table-scroll-body {
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        .table-scroll-body::-webkit-scrollbar {
+            width: 6px;
+        }
+        .table-scroll-body::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        .table-scroll-body::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+        .table-scroll-body::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+        .fade-in {
+            animation: fadeIn 0.2s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .toast-enter {
+            animation: slideDown 0.3s ease-out;
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-100%); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen font-sans">
+
+    <!-- API Key Modal -->
+    <div id="auth-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm hidden">
+        <div class="bg-slate-900 border border-slate-700 rounded-lg p-8 w-full max-w-md mx-4 shadow-2xl">
+            <div class="flex items-center gap-3 mb-6">
+                <svg class="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                </svg>
+                <h2 class="text-xl font-bold text-white">API Key Required</h2>
+            </div>
+            <p class="text-slate-400 text-sm mb-4">Enter your GPU API key to access the dashboard.</p>
+            <input
+                id="api-key-input"
+                type="password"
+                placeholder="Enter API key..."
+                class="w-full bg-slate-800 border border-slate-600 rounded-md px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all mb-4 font-mono text-sm"
+            />
+            <button
+                id="api-key-submit"
+                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-md transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-900"
+            >
+                Connect
+            </button>
+            <p id="auth-error" class="text-red-400 text-sm mt-3 hidden">Invalid API key. Please try again.</p>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-40 flex flex-col gap-2"></div>
+
+    <!-- Main App -->
+    <div id="app" class="hidden">
+
+        <!-- Header -->
+        <header class="bg-slate-900 border-b border-slate-700 px-6 py-4">
+            <div class="max-w-7xl mx-auto flex items-center justify-between">
+                <h1 class="text-xl font-bold text-white tracking-tight">GPU API</h1>
+
+                <div class="flex items-center gap-3">
+                    <!-- Health Status -->
+                    <div id="health-status" class="flex items-center gap-2 text-sm px-3 py-1.5 rounded-md bg-slate-800 border border-slate-700">
+                        <span id="health-dot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+                        <span id="health-text" class="text-slate-400">Checking...</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <!-- Auto-refresh toggle -->
+                    <div class="flex items-center gap-2">
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input id="auto-refresh-toggle" type="checkbox" checked class="sr-only peer">
+                            <div class="w-9 h-5 bg-slate-700 rounded-full peer peer-checked:bg-blue-600 peer-focus:ring-2 peer-focus:ring-blue-500 peer-focus:ring-offset-2 peer-focus:ring-offset-slate-900 transition-all after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                        </label>
+                        <span class="text-xs text-slate-400">Auto-refresh</span>
+                    </div>
+
+                    <!-- Manual refresh button (shown when auto-refresh is off) -->
+                    <button id="manual-refresh-btn" class="hidden text-slate-400 hover:text-white transition-all text-sm px-3 py-1.5 rounded-md bg-slate-800 border border-slate-700 hover:border-slate-600">
+                        Refresh
+                    </button>
+
+                    <!-- Change API key button -->
+                    <button id="change-key-btn" class="text-slate-400 hover:text-white transition-all p-2 rounded-md hover:bg-slate-800" title="Change API key">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Content -->
+        <main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+            <!-- Summary Cards -->
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">Total Jobs</p>
+                    <p id="card-total" class="text-2xl font-bold text-white transition-all">0</p>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">Running</p>
+                    <p id="card-running" class="text-2xl font-bold text-blue-400 transition-all">0</p>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">Succeeded</p>
+                    <p id="card-succeeded" class="text-2xl font-bold text-green-400 transition-all">0</p>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">Failed</p>
+                    <p id="card-failed" class="text-2xl font-bold text-red-400 transition-all">0</p>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">Avg Duration</p>
+                    <p id="card-avg-duration" class="text-2xl font-bold text-white transition-all">--</p>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <p class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">Throughput</p>
+                    <p id="card-throughput" class="text-2xl font-bold text-white transition-all">--</p>
+                    <p class="text-slate-500 text-[10px]">jobs/min (5m)</p>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <h3 class="text-sm font-medium text-slate-400 mb-3">Status Distribution</h3>
+                    <div class="relative" style="height: 200px;">
+                        <canvas id="chart-status"></canvas>
+                    </div>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <h3 class="text-sm font-medium text-slate-400 mb-3">Priority Distribution</h3>
+                    <div class="relative" style="height: 200px;">
+                        <canvas id="chart-priority"></canvas>
+                    </div>
+                </div>
+                <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                    <h3 class="text-sm font-medium text-slate-400 mb-3">Duration Distribution</h3>
+                    <div class="relative" style="height: 200px;">
+                        <canvas id="chart-duration"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Jobs Table -->
+            <div class="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+                <!-- Filter Bar -->
+                <div class="flex items-center gap-2 px-4 py-3 border-b border-slate-700">
+                    <span class="text-xs text-slate-500 mr-2">Filter:</span>
+                    <button data-filter="all" class="filter-btn active-filter px-3 py-1 text-xs rounded-md font-medium transition-all bg-blue-600 text-white">All</button>
+                    <button data-filter="RUNNING" class="filter-btn px-3 py-1 text-xs rounded-md font-medium transition-all bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white border border-slate-700">Running</button>
+                    <button data-filter="SUCCEEDED" class="filter-btn px-3 py-1 text-xs rounded-md font-medium transition-all bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white border border-slate-700">Succeeded</button>
+                    <button data-filter="FAILED" class="filter-btn px-3 py-1 text-xs rounded-md font-medium transition-all bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white border border-slate-700">Failed</button>
+                    <span id="job-count-label" class="ml-auto text-xs text-slate-500"></span>
+                </div>
+
+                <!-- Table -->
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-800/50 sticky top-0 z-10">
+                        <tr class="text-left text-xs text-slate-500 uppercase tracking-wider">
+                            <th class="px-4 py-3 font-medium">Status</th>
+                            <th class="px-4 py-3 font-medium">Job ID</th>
+                            <th class="px-4 py-3 font-medium">Priority</th>
+                            <th class="px-4 py-3 font-medium">Model</th>
+                            <th class="px-4 py-3 font-medium">Prompts</th>
+                            <th class="px-4 py-3 font-medium">Duration</th>
+                            <th class="px-4 py-3 font-medium">Submitted</th>
+                        </tr>
+                    </thead>
+                </table>
+                <div class="table-scroll-body">
+                    <table class="w-full text-sm" id="jobs-table">
+                        <tbody id="jobs-tbody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Empty State -->
+                <div id="empty-state" class="hidden py-16 text-center">
+                    <svg class="w-12 h-12 mx-auto text-slate-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                    </svg>
+                    <p class="text-slate-500 text-sm">No jobs yet. Submit a batch to get started.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+    (function() {
+        'use strict';
+
+        // ---- State ----
+        let jobs = [];
+        let expandedRows = new Set();
+        let activeFilter = 'all';
+        let autoRefreshEnabled = true;
+        let refreshInterval = null;
+        let healthInterval = null;
+        let durationTickInterval = null;
+        let statusChart = null;
+        let priorityChart = null;
+        let durationChart = null;
+
+        // ---- DOM refs ----
+        const authModal = document.getElementById('auth-modal');
+        const apiKeyInput = document.getElementById('api-key-input');
+        const apiKeySubmit = document.getElementById('api-key-submit');
+        const authError = document.getElementById('auth-error');
+        const app = document.getElementById('app');
+        const changeKeyBtn = document.getElementById('change-key-btn');
+        const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
+        const manualRefreshBtn = document.getElementById('manual-refresh-btn');
+        const jobsTbody = document.getElementById('jobs-tbody');
+        const emptyState = document.getElementById('empty-state');
+        const toastContainer = document.getElementById('toast-container');
+        const jobCountLabel = document.getElementById('job-count-label');
+
+        // ---- API Key Management ----
+        function getApiKey() {
+            return localStorage.getItem('gpu_api_key') || '';
+        }
+
+        function setApiKey(key) {
+            localStorage.setItem('gpu_api_key', key);
+        }
+
+        function clearApiKey() {
+            localStorage.removeItem('gpu_api_key');
+        }
+
+        function showAuthModal() {
+            authModal.classList.remove('hidden');
+            app.classList.add('hidden');
+            authError.classList.add('hidden');
+            apiKeyInput.value = '';
+            stopIntervals();
+            setTimeout(function() { apiKeyInput.focus(); }, 100);
+        }
+
+        function hideAuthModal() {
+            authModal.classList.add('hidden');
+            app.classList.remove('hidden');
+        }
+
+        // ---- Fetch helpers ----
+        async function apiFetch(path, options) {
+            var opts = options || {};
+            var headers = opts.headers || {};
+            var key = getApiKey();
+            if (key) {
+                headers['X-API-Key'] = key;
+            }
+            opts.headers = headers;
+
+            var response = await fetch(path, opts);
+            if (response.status === 401) {
+                clearApiKey();
+                showAuthModal();
+                throw new Error('Unauthorized');
+            }
+            return response;
+        }
+
+        async function apiFetchJSON(path, options) {
+            var response = await apiFetch(path, options);
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+            return response.json();
+        }
+
+        // ---- Toast ----
+        function showToast(message, type) {
+            var t = type || 'error';
+            var toast = document.createElement('div');
+            var bgColor = t === 'error' ? 'bg-red-900/90 border-red-700' : 'bg-green-900/90 border-green-700';
+            var textColor = t === 'error' ? 'text-red-200' : 'text-green-200';
+            toast.className = 'toast-enter ' + bgColor + ' border rounded-md px-4 py-3 flex items-center gap-3 shadow-lg ' + textColor + ' text-sm';
+            toast.innerHTML = '<span>' + escapeHTML(message) + '</span>' +
+                '<button class="ml-2 text-xs opacity-60 hover:opacity-100" onclick="this.parentElement.remove()">Dismiss</button>';
+            toastContainer.appendChild(toast);
+            setTimeout(function() { if (toast.parentElement) toast.remove(); }, 8000);
+        }
+
+        // ---- Relative Time ----
+        function relativeTime(isoString) {
+            if (!isoString) return '--';
+            var date = new Date(isoString);
+            var now = Date.now();
+            var diffSeconds = Math.floor((now - date.getTime()) / 1000);
+            if (diffSeconds < 0) return 'just now';
+            if (diffSeconds < 60) return diffSeconds + 's ago';
+            var diffMinutes = Math.floor(diffSeconds / 60);
+            if (diffMinutes < 60) return diffMinutes + 'm ago';
+            var diffHours = Math.floor(diffMinutes / 60);
+            if (diffHours < 24) return diffHours + 'h ago';
+            var diffDays = Math.floor(diffHours / 24);
+            return diffDays + 'd ago';
+        }
+
+        function formatTimestamp(isoString) {
+            if (!isoString) return '--';
+            var d = new Date(isoString);
+            return d.toLocaleString();
+        }
+
+        function formatDuration(seconds) {
+            if (seconds == null || seconds === 0) return '--';
+            if (seconds < 0.1) return '<0.1s';
+            if (seconds < 60) return seconds.toFixed(1) + 's';
+            var mins = Math.floor(seconds / 60);
+            var secs = (seconds % 60).toFixed(0);
+            return mins + 'm ' + secs + 's';
+        }
+
+        function escapeHTML(str) {
+            if (!str) return '';
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // ---- Elapsed time for running jobs ----
+        function getElapsedSeconds(job) {
+            if (job.started_at) {
+                var start = new Date(job.started_at).getTime();
+                return (Date.now() - start) / 1000;
+            }
+            return 0;
+        }
+
+        // ---- Health Check ----
+        async function checkHealth() {
+            try {
+                var data = await fetch('/health/deep').then(function(r) { return r.json(); });
+                var dot = document.getElementById('health-dot');
+                var text = document.getElementById('health-text');
+                if (data.status === 'healthy') {
+                    dot.className = 'w-2.5 h-2.5 rounded-full bg-green-500';
+                    text.className = 'text-green-400';
+                    text.textContent = 'Healthy';
+                } else {
+                    dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+                    text.className = 'text-red-400';
+                    text.textContent = 'Degraded';
+                }
+            } catch (e) {
+                var dot = document.getElementById('health-dot');
+                var text = document.getElementById('health-text');
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-yellow-500';
+                text.className = 'text-yellow-400';
+                text.textContent = 'Unreachable';
+            }
+        }
+
+        // ---- Data Fetching ----
+        async function fetchJobs() {
+            try {
+                var data = await apiFetchJSON('/v1/batches?limit=200');
+                jobs = data.jobs || [];
+                updateSummaryCards();
+                updateCharts();
+                updateTable();
+            } catch (e) {
+                if (e.message !== 'Unauthorized') {
+                    showToast('Failed to fetch jobs: ' + e.message);
+                }
+            }
+        }
+
+        // ---- Summary Cards ----
+        function updateSummaryCards() {
+            var total = jobs.length;
+            var running = 0;
+            var succeeded = 0;
+            var failed = 0;
+            var totalDuration = 0;
+            var durationCount = 0;
+
+            var now = Date.now();
+            var fiveMinAgo = now - 5 * 60 * 1000;
+            var completedInWindow = 0;
+
+            for (var i = 0; i < jobs.length; i++) {
+                var j = jobs[i];
+                if (j.status === 'RUNNING') running++;
+                else if (j.status === 'SUCCEEDED') succeeded++;
+                else if (j.status === 'FAILED') failed++;
+
+                if (j.status === 'SUCCEEDED' && j.duration_seconds > 0) {
+                    totalDuration += j.duration_seconds;
+                    durationCount++;
+                }
+
+                if (j.completed_at) {
+                    var ct = new Date(j.completed_at).getTime();
+                    if (ct >= fiveMinAgo) {
+                        completedInWindow++;
+                    }
+                }
+            }
+
+            document.getElementById('card-total').textContent = total;
+            document.getElementById('card-running').textContent = running;
+            document.getElementById('card-succeeded').textContent = succeeded;
+            document.getElementById('card-failed').textContent = failed;
+
+            if (durationCount > 0) {
+                document.getElementById('card-avg-duration').textContent = (totalDuration / durationCount).toFixed(1) + 's';
+            } else {
+                document.getElementById('card-avg-duration').textContent = '--';
+            }
+
+            if (completedInWindow > 0) {
+                var throughput = (completedInWindow / 5).toFixed(1);
+                document.getElementById('card-throughput').textContent = throughput;
+            } else {
+                document.getElementById('card-throughput').textContent = '--';
+            }
+        }
+
+        // ---- Charts ----
+        function initCharts() {
+            Chart.defaults.color = '#94a3b8';
+            Chart.defaults.font.family = 'system-ui, -apple-system, sans-serif';
+
+            // Status Doughnut
+            var ctxStatus = document.getElementById('chart-status').getContext('2d');
+            statusChart = new Chart(ctxStatus, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Running', 'Succeeded', 'Failed'],
+                    datasets: [{
+                        data: [0, 0, 0],
+                        backgroundColor: ['#3b82f6', '#22c55e', '#ef4444'],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { boxWidth: 10, padding: 12, font: { size: 11 } }
+                        }
+                    }
+                },
+                plugins: [{
+                    id: 'centerText',
+                    beforeDraw: function(chart) {
+                        var d = chart.data.datasets[0].data;
+                        var total = d.reduce(function(a, b) { return a + b; }, 0);
+                        if (total === 0) return;
+                        var ctx = chart.ctx;
+                        var centerX = (chart.chartArea.left + chart.chartArea.right) / 2;
+                        var centerY = (chart.chartArea.top + chart.chartArea.bottom) / 2;
+                        ctx.save();
+                        ctx.font = 'bold 20px system-ui';
+                        ctx.fillStyle = '#ffffff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(total.toString(), centerX, centerY);
+                        ctx.restore();
+                    }
+                }]
+            });
+
+            // Priority Horizontal Bar
+            var ctxPriority = document.getElementById('chart-priority').getContext('2d');
+            priorityChart = new Chart(ctxPriority, {
+                type: 'bar',
+                data: {
+                    labels: ['High', 'Medium', 'Low'],
+                    datasets: [{
+                        data: [0, 0, 0],
+                        backgroundColor: ['#f97316', '#3b82f6', '#6b7280'],
+                        borderWidth: 0,
+                        borderRadius: 4,
+                        barPercentage: 0.6
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            grid: { display: false },
+                            ticks: { precision: 0, font: { size: 11 } },
+                            border: { display: false }
+                        },
+                        y: {
+                            grid: { display: false },
+                            ticks: { font: { size: 11 } },
+                            border: { display: false }
+                        }
+                    }
+                }
+            });
+
+            // Duration Histogram
+            var ctxDuration = document.getElementById('chart-duration').getContext('2d');
+            durationChart = new Chart(ctxDuration, {
+                type: 'bar',
+                data: {
+                    labels: ['<1s', '1-2s', '2-5s', '5-10s', '10-30s', '>30s'],
+                    datasets: [{
+                        data: [0, 0, 0, 0, 0, 0],
+                        backgroundColor: '#6366f1',
+                        borderWidth: 0,
+                        borderRadius: 4,
+                        barPercentage: 0.7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { font: { size: 10 } },
+                            border: { display: false }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            grid: { display: false },
+                            ticks: { precision: 0, font: { size: 11 } },
+                            border: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateCharts() {
+            var running = 0, succeeded = 0, failed = 0;
+            var high = 0, medium = 0, low = 0;
+            var buckets = [0, 0, 0, 0, 0, 0]; // <1, 1-2, 2-5, 5-10, 10-30, >30
+
+            for (var i = 0; i < jobs.length; i++) {
+                var j = jobs[i];
+                if (j.status === 'RUNNING') running++;
+                else if (j.status === 'SUCCEEDED') succeeded++;
+                else if (j.status === 'FAILED') failed++;
+
+                if (j.priority === 'high') high++;
+                else if (j.priority === 'medium') medium++;
+                else if (j.priority === 'low') low++;
+
+                if (j.duration_seconds > 0 && j.status !== 'RUNNING') {
+                    var d = j.duration_seconds;
+                    if (d < 1) buckets[0]++;
+                    else if (d < 2) buckets[1]++;
+                    else if (d < 5) buckets[2]++;
+                    else if (d < 10) buckets[3]++;
+                    else if (d < 30) buckets[4]++;
+                    else buckets[5]++;
+                }
+            }
+
+            statusChart.data.datasets[0].data = [running, succeeded, failed];
+            statusChart.update('none');
+
+            priorityChart.data.datasets[0].data = [high, medium, low];
+            priorityChart.update('none');
+
+            durationChart.data.datasets[0].data = buckets;
+            durationChart.update('none');
+        }
+
+        // ---- Jobs Table ----
+        function getFilteredJobs() {
+            if (activeFilter === 'all') return jobs;
+            return jobs.filter(function(j) { return j.status === activeFilter; });
+        }
+
+        function statusDotHTML(status) {
+            if (status === 'RUNNING') {
+                return '<span class="inline-block w-2 h-2 rounded-full bg-blue-500 pulse-dot"></span>';
+            } else if (status === 'SUCCEEDED') {
+                return '<span class="inline-block w-2 h-2 rounded-full bg-green-500"></span>';
+            } else if (status === 'FAILED') {
+                return '<span class="inline-block w-2 h-2 rounded-full bg-red-500"></span>';
+            }
+            return '<span class="inline-block w-2 h-2 rounded-full bg-slate-500"></span>';
+        }
+
+        function statusTextColor(status) {
+            if (status === 'RUNNING') return 'text-blue-400';
+            if (status === 'SUCCEEDED') return 'text-green-400';
+            if (status === 'FAILED') return 'text-red-400';
+            return 'text-slate-400';
+        }
+
+        function priorityPillHTML(priority) {
+            var colors = {
+                high: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+                medium: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+                low: 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+            };
+            var c = colors[priority] || colors.low;
+            return '<span class="px-2 py-0.5 text-xs rounded-md border font-medium ' + c + '">' + escapeHTML(priority) + '</span>';
+        }
+
+        function buildJobRow(job) {
+            var isExpanded = expandedRows.has(job.job_id);
+            var dur;
+            if (job.status === 'RUNNING') {
+                dur = formatDuration(getElapsedSeconds(job));
+            } else if (job.duration_seconds > 0) {
+                dur = formatDuration(job.duration_seconds);
+            } else {
+                dur = '--';
+            }
+
+            var html = '<tr class="job-row border-b border-slate-800 hover:bg-slate-800/50 cursor-pointer transition-all" data-job-id="' + escapeHTML(job.job_id) + '">' +
+                '<td class="px-4 py-3 w-28"><div class="flex items-center gap-2">' + statusDotHTML(job.status) + '<span class="' + statusTextColor(job.status) + ' text-xs font-medium">' + escapeHTML(job.status) + '</span></div></td>' +
+                '<td class="px-4 py-3 font-mono text-xs text-slate-500">' + escapeHTML(job.job_id.substring(0, 8)) + '</td>' +
+                '<td class="px-4 py-3">' + priorityPillHTML(job.priority) + '</td>' +
+                '<td class="px-4 py-3 text-slate-300 text-xs">' + escapeHTML(job.model || '--') + '</td>' +
+                '<td class="px-4 py-3 text-slate-300 text-xs">' + (job.prompt_count || 0) + '</td>' +
+                '<td class="px-4 py-3 text-slate-300 text-xs font-mono duration-cell" data-job-id="' + escapeHTML(job.job_id) + '">' + dur + '</td>' +
+                '<td class="px-4 py-3 text-slate-500 text-xs" title="' + escapeHTML(formatTimestamp(job.enqueued_at)) + '">' + relativeTime(job.enqueued_at) + '</td>' +
+                '</tr>';
+
+            if (isExpanded) {
+                html += '<tr class="detail-row" data-detail-for="' + escapeHTML(job.job_id) + '">' +
+                    '<td colspan="7" class="p-0"><div class="bg-slate-800/80 border-b border-slate-700 p-4 fade-in" id="detail-' + escapeHTML(job.job_id) + '">' +
+                    '<div class="text-xs text-slate-500">Loading details...</div>' +
+                    '</div></td></tr>';
+            }
+
+            return html;
+        }
+
+        function updateTable() {
+            var filtered = getFilteredJobs();
+            jobCountLabel.textContent = filtered.length + ' job' + (filtered.length !== 1 ? 's' : '');
+
+            if (filtered.length === 0) {
+                emptyState.classList.remove('hidden');
+                jobsTbody.innerHTML = '';
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+
+            // Build a map of current rows for in-place update
+            var existingIds = new Set();
+            var existingRowMap = {};
+            var rows = jobsTbody.querySelectorAll('tr.job-row');
+            for (var i = 0; i < rows.length; i++) {
+                var id = rows[i].getAttribute('data-job-id');
+                existingIds.add(id);
+                existingRowMap[id] = rows[i];
+            }
+
+            var newIds = new Set();
+            for (var i = 0; i < filtered.length; i++) {
+                newIds.add(filtered[i].job_id);
+            }
+
+            // If the set of job IDs or their order changed, rebuild the whole table
+            var needsRebuild = false;
+            if (existingIds.size !== newIds.size) {
+                needsRebuild = true;
+            } else {
+                var currentRowIds = [];
+                for (var i = 0; i < rows.length; i++) {
+                    currentRowIds.push(rows[i].getAttribute('data-job-id'));
+                }
+                for (var i = 0; i < filtered.length; i++) {
+                    if (currentRowIds[i] !== filtered[i].job_id) {
+                        needsRebuild = true;
+                        break;
+                    }
+                }
+            }
+
+            if (needsRebuild) {
+                var html = '';
+                for (var i = 0; i < filtered.length; i++) {
+                    html += buildJobRow(filtered[i]);
+                }
+                jobsTbody.innerHTML = html;
+                attachRowListeners();
+                // Re-fetch details for expanded rows
+                expandedRows.forEach(function(jobId) {
+                    if (newIds.has(jobId)) {
+                        fetchJobDetail(jobId);
+                    }
+                });
+            } else {
+                // In-place update of cell contents
+                for (var i = 0; i < filtered.length; i++) {
+                    var job = filtered[i];
+                    var row = existingRowMap[job.job_id];
+                    if (!row) continue;
+
+                    var cells = row.children;
+                    // Status cell
+                    cells[0].innerHTML = '<div class="flex items-center gap-2">' + statusDotHTML(job.status) + '<span class="' + statusTextColor(job.status) + ' text-xs font-medium">' + escapeHTML(job.status) + '</span></div>';
+                    // Duration cell
+                    var dur;
+                    if (job.status === 'RUNNING') {
+                        dur = formatDuration(getElapsedSeconds(job));
+                    } else if (job.duration_seconds > 0) {
+                        dur = formatDuration(job.duration_seconds);
+                    } else {
+                        dur = '--';
+                    }
+                    cells[5].textContent = dur;
+                    // Submitted cell
+                    cells[6].textContent = relativeTime(job.enqueued_at);
+                    cells[6].title = formatTimestamp(job.enqueued_at);
+                }
+            }
+        }
+
+        function attachRowListeners() {
+            var rows = jobsTbody.querySelectorAll('tr.job-row');
+            for (var i = 0; i < rows.length; i++) {
+                rows[i].addEventListener('click', handleRowClick);
+            }
+        }
+
+        function handleRowClick(e) {
+            var row = e.currentTarget;
+            var jobId = row.getAttribute('data-job-id');
+
+            if (expandedRows.has(jobId)) {
+                // Collapse
+                expandedRows.delete(jobId);
+                var detail = jobsTbody.querySelector('tr[data-detail-for="' + jobId + '"]');
+                if (detail) detail.remove();
+            } else {
+                // Expand
+                expandedRows.add(jobId);
+                var detailRow = document.createElement('tr');
+                detailRow.className = 'detail-row';
+                detailRow.setAttribute('data-detail-for', jobId);
+                detailRow.innerHTML = '<td colspan="7" class="p-0"><div class="bg-slate-800/80 border-b border-slate-700 p-4 fade-in" id="detail-' + escapeHTML(jobId) + '">' +
+                    '<div class="text-xs text-slate-500">Loading details...</div></div></td>';
+                row.after(detailRow);
+                fetchJobDetail(jobId);
+            }
+        }
+
+        async function fetchJobDetail(jobId) {
+            var container = document.getElementById('detail-' + jobId);
+            if (!container) return;
+
+            try {
+                var data = await apiFetchJSON('/v1/batches/' + encodeURIComponent(jobId));
+                renderJobDetail(container, data, jobId);
+            } catch (e) {
+                if (e.message !== 'Unauthorized') {
+                    container.innerHTML = '<div class="text-red-400 text-xs">Failed to load details: ' + escapeHTML(e.message) + '</div>';
+                }
+            }
+        }
+
+        function renderJobDetail(container, data, jobId) {
+            // Find the list item for timestamps
+            var listJob = null;
+            for (var i = 0; i < jobs.length; i++) {
+                if (jobs[i].job_id === jobId) { listJob = jobs[i]; break; }
+            }
+
+            var html = '<div class="space-y-4">';
+
+            // Header with close button
+            html += '<div class="flex items-start justify-between">';
+            html += '<div class="space-y-3 flex-1">';
+
+            // Full Job ID with copy
+            html += '<div class="flex items-center gap-2">' +
+                '<span class="text-xs text-slate-500">Job ID:</span>' +
+                '<code class="text-xs font-mono text-slate-300 bg-slate-900 px-2 py-1 rounded">' + escapeHTML(data.job_id) + '</code>' +
+                '<button class="copy-btn text-slate-500 hover:text-white transition-all" data-copy="' + escapeHTML(data.job_id) + '" title="Copy to clipboard">' +
+                '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>' +
+                '</button></div>';
+
+            // Meta row
+            html += '<div class="flex flex-wrap gap-4 text-xs">';
+            html += '<div><span class="text-slate-500">Status:</span> <span class="' + statusTextColor(data.status) + ' font-medium">' + escapeHTML(data.status) + '</span></div>';
+            html += '<div><span class="text-slate-500">Priority:</span> ' + priorityPillHTML(data.priority) + '</div>';
+            if (listJob && listJob.model) {
+                html += '<div><span class="text-slate-500">Model:</span> <span class="text-slate-300">' + escapeHTML(listJob.model) + '</span></div>';
+            }
+            html += '</div>';
+
+            // Timestamps
+            if (listJob) {
+                html += '<div class="flex flex-wrap gap-4 text-xs">';
+                html += '<div><span class="text-slate-500">Submitted:</span> <span class="text-slate-300">' + escapeHTML(formatTimestamp(listJob.enqueued_at)) + '</span></div>';
+                if (listJob.started_at) {
+                    html += '<div><span class="text-slate-500">Started:</span> <span class="text-slate-300">' + escapeHTML(formatTimestamp(listJob.started_at)) + '</span></div>';
+                }
+                if (listJob.completed_at) {
+                    html += '<div><span class="text-slate-500">Completed:</span> <span class="text-slate-300">' + escapeHTML(formatTimestamp(listJob.completed_at)) + '</span></div>';
+                }
+                if (listJob.duration_seconds > 0 && listJob.status !== 'RUNNING') {
+                    html += '<div><span class="text-slate-500">Duration:</span> <span class="text-slate-300">' + formatDuration(listJob.duration_seconds) + '</span></div>';
+                }
+                html += '</div>';
+            }
+
+            html += '</div>'; // end left side
+
+            // Close button
+            html += '<button class="close-detail-btn text-slate-500 hover:text-white transition-all p-1" data-job-id="' + escapeHTML(jobId) + '">' +
+                '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+
+            html += '</div>'; // end header flex
+
+            // Results or Error
+            if (data.status === 'FAILED') {
+                html += '<div class="border border-red-700 bg-red-900/30 rounded-md p-3">' +
+                    '<p class="text-red-400 text-xs font-medium mb-1">Error</p>' +
+                    '<p class="text-red-300 text-xs font-mono whitespace-pre-wrap">' + escapeHTML(data.message || 'Unknown error') + '</p></div>';
+            } else if (data.results && data.results.length > 0) {
+                html += '<div class="border border-slate-700 rounded-md overflow-hidden">';
+                html += '<table class="w-full text-xs">';
+                html += '<thead><tr class="bg-slate-900"><th class="px-3 py-2 text-left text-slate-500 font-medium w-1/3">Prompt</th><th class="px-3 py-2 text-left text-slate-500 font-medium">Output</th></tr></thead>';
+                html += '<tbody>';
+                for (var i = 0; i < data.results.length; i++) {
+                    var r = data.results[i];
+                    html += '<tr class="border-t border-slate-700">' +
+                        '<td class="px-3 py-2 font-mono text-slate-400 bg-slate-800/50 align-top whitespace-pre-wrap break-words">' + escapeHTML(r.prompt || '') + '</td>' +
+                        '<td class="px-3 py-2 font-mono text-slate-300 align-top whitespace-pre-wrap break-words">' + escapeHTML(r.output || '') + '</td>' +
+                        '</tr>';
+                }
+                html += '</tbody></table></div>';
+            } else if (data.status === 'RUNNING') {
+                html += '<div class="text-xs text-slate-500 italic">Job is still running. Results will appear when complete.</div>';
+            }
+
+            html += '</div>';
+
+            container.innerHTML = html;
+
+            // Attach copy listeners
+            var copyBtns = container.querySelectorAll('.copy-btn');
+            for (var i = 0; i < copyBtns.length; i++) {
+                copyBtns[i].addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var text = this.getAttribute('data-copy');
+                    navigator.clipboard.writeText(text).then(function() {
+                        showToast('Copied to clipboard', 'success');
+                    });
+                });
+            }
+
+            // Attach close listener
+            var closeBtns = container.querySelectorAll('.close-detail-btn');
+            for (var i = 0; i < closeBtns.length; i++) {
+                closeBtns[i].addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    var jid = this.getAttribute('data-job-id');
+                    expandedRows.delete(jid);
+                    var detailRow = jobsTbody.querySelector('tr[data-detail-for="' + jid + '"]');
+                    if (detailRow) detailRow.remove();
+                });
+            }
+        }
+
+        // ---- Duration Tick (update running job durations every second) ----
+        function tickDurations() {
+            for (var i = 0; i < jobs.length; i++) {
+                var j = jobs[i];
+                if (j.status !== 'RUNNING') continue;
+                var cells = jobsTbody.querySelectorAll('td.duration-cell[data-job-id="' + j.job_id + '"]');
+                for (var c = 0; c < cells.length; c++) {
+                    cells[c].textContent = formatDuration(getElapsedSeconds(j));
+                }
+            }
+        }
+
+        // ---- Filter Buttons ----
+        function setupFilters() {
+            var btns = document.querySelectorAll('.filter-btn');
+            for (var i = 0; i < btns.length; i++) {
+                btns[i].addEventListener('click', function() {
+                    activeFilter = this.getAttribute('data-filter');
+                    // Update button styles
+                    var all = document.querySelectorAll('.filter-btn');
+                    for (var b = 0; b < all.length; b++) {
+                        all[b].className = 'filter-btn px-3 py-1 text-xs rounded-md font-medium transition-all bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white border border-slate-700';
+                    }
+                    this.className = 'filter-btn active-filter px-3 py-1 text-xs rounded-md font-medium transition-all bg-blue-600 text-white border border-blue-600';
+                    updateTable();
+                });
+            }
+        }
+
+        // ---- Auto-Refresh ----
+        function startIntervals() {
+            stopIntervals();
+            if (autoRefreshEnabled) {
+                refreshInterval = setInterval(fetchJobs, 5000);
+            }
+            healthInterval = setInterval(checkHealth, 30000);
+            durationTickInterval = setInterval(tickDurations, 1000);
+        }
+
+        function stopIntervals() {
+            if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+            if (healthInterval) { clearInterval(healthInterval); healthInterval = null; }
+            if (durationTickInterval) { clearInterval(durationTickInterval); durationTickInterval = null; }
+        }
+
+        // ---- Init ----
+        function init() {
+            // Auth setup
+            apiKeySubmit.addEventListener('click', handleKeySubmit);
+            apiKeyInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') handleKeySubmit();
+            });
+
+            changeKeyBtn.addEventListener('click', function() {
+                clearApiKey();
+                showAuthModal();
+            });
+
+            // Auto-refresh toggle
+            autoRefreshToggle.addEventListener('change', function() {
+                autoRefreshEnabled = this.checked;
+                if (autoRefreshEnabled) {
+                    manualRefreshBtn.classList.add('hidden');
+                    startIntervals();
+                } else {
+                    manualRefreshBtn.classList.remove('hidden');
+                    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+                }
+            });
+
+            manualRefreshBtn.addEventListener('click', function() {
+                fetchJobs();
+            });
+
+            setupFilters();
+            initCharts();
+
+            // Check if we already have an API key
+            if (getApiKey()) {
+                hideAuthModal();
+                startApp();
+            } else {
+                showAuthModal();
+            }
+        }
+
+        async function handleKeySubmit() {
+            var key = apiKeyInput.value.trim();
+            if (!key) {
+                authError.textContent = 'Please enter an API key.';
+                authError.classList.remove('hidden');
+                return;
+            }
+
+            // Test the key by fetching a protected endpoint
+            try {
+                var response = await fetch('/v1/batches/' + 'test-auth', {
+                    headers: { 'X-API-Key': key }
+                });
+                // 401 means bad key, 404 means key is good but job not found (expected)
+                if (response.status === 401) {
+                    authError.textContent = 'Invalid API key. Please try again.';
+                    authError.classList.remove('hidden');
+                    return;
+                }
+                // Key is valid (got 404 or 200, not 401)
+                setApiKey(key);
+                authError.classList.add('hidden');
+                hideAuthModal();
+                startApp();
+            } catch (e) {
+                authError.textContent = 'Connection failed. Is the API running?';
+                authError.classList.remove('hidden');
+            }
+        }
+
+        function startApp() {
+            checkHealth();
+            fetchJobs();
+            startIntervals();
+        }
+
+        // Boot
+        init();
+    })();
+    </script>
+</body>
+</html>
