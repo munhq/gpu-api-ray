@@ -1,14 +1,10 @@
 package main
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
-	"text/template"
 )
 
 // --- Request / Response types ---
@@ -40,59 +36,15 @@ type QueueStatusResponse struct {
 	MaxGPUs    int `json:"max_gpus"`
 }
 
-// --- Python entrypoint template ---
-
-const pythonEntrypointTmpl = `import json
-from vllm import LLM, SamplingParams
-
-def main():
-    model = {{.Model | printf "%q"}}
-    prompts = json.loads({{.PromptsJSON | printf "%q"}})
-    max_tokens = {{.MaxTokens}}
-
-    llm = LLM(model=model, trust_remote_code=True)
-    params = SamplingParams(max_tokens=max_tokens)
-    outputs = llm.generate([p["prompt"] for p in prompts], params)
-
-    results = []
-    for prompt, output in zip(prompts, outputs):
-        results.append({"prompt": prompt["prompt"], "output": output.outputs[0].text})
-
-    print("RESULTS_START")
-    print(json.dumps(results))
-    print("RESULTS_END")
-
-if __name__ == "__main__":
-    main()
-`
-
-var entrypointTemplate = template.Must(template.New("entrypoint").Parse(pythonEntrypointTmpl))
-
-type entrypointData struct {
-	Model       string
-	PromptsJSON string
-	MaxTokens   int
-}
-
-// --- Job Client Interface ---
-
-// JobClient abstracts job submission to Ray cluster (via REST API or Kubernetes CRDs).
-type JobClient interface {
-	SubmitJob(req SubmitJobRequest) (string, error)
-	GetJobStatus(jobID string) (*JobStatusResponse, error)
-	GetJobLogs(jobID string) (string, error)
-	Healthz() error
-}
-
 // --- Handlers ---
 
 type Handlers struct {
 	cfg   *Config
-	ray   JobClient
+	ray   *RayClient
 	queue *JobQueue
 }
 
-func NewHandlers(cfg *Config, ray JobClient, queue *JobQueue) *Handlers {
+func NewHandlers(cfg *Config, ray *RayClient, queue *JobQueue) *Handlers {
 	return &Handlers{cfg: cfg, ray: ray, queue: queue}
 }
 
@@ -141,43 +93,20 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build Python entrypoint via template (safe interpolation)
-	promptsJSON, err := json.Marshal(req.Input)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to serialize prompts"})
-		return
+	// Extract prompts from input
+	prompts := make([]string, len(req.Input))
+	for i, item := range req.Input {
+		prompts[i] = item["prompt"]
 	}
 
-	var scriptBuf bytes.Buffer
-	if err := entrypointTemplate.Execute(&scriptBuf, entrypointData{
-		Model:       model,
-		PromptsJSON: string(promptsJSON),
-		MaxTokens:   maxTokens,
-	}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build entrypoint script"})
-		return
-	}
-
-	// Enqueue job — the dispatcher will submit to Ray when a GPU slot is available
-	scriptB64 := base64.StdEncoding.EncodeToString(scriptBuf.Bytes())
-	job := h.queue.Enqueue(SubmitJobRequest{
-		Entrypoint:        fmt.Sprintf("printf '%%s' '%s' | base64 -d > /tmp/job.py && python3 /tmp/job.py", scriptB64),
-		EntrypointNumGpus: 1,
-		RuntimeEnv: map[string]any{
-			"pip": []string{"vllm", "numpy<2.0", "scipy>=1.14"},
-			"env_vars": map[string]string{
-				"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
-				"HF_HOME":                      "/opt/models/huggingface",
-				"TRANSFORMERS_CACHE":            "/opt/models/huggingface",
-			},
-		},
-		Metadata: map[string]string{
-			"model":    model,
-			"priority": priority,
-		},
+	// Enqueue — the dispatcher will send to the persistent vLLM serve endpoint
+	job := h.queue.Enqueue(InferenceRequest{
+		Model:     model,
+		Prompts:   prompts,
+		MaxTokens: maxTokens,
 	}, priority)
 
-	log.Printf("enqueued job %s (model=%s, prompts=%d, priority=%s)", job.ID, model, len(req.Input), priority)
+	log.Printf("enqueued job %s (model=%s, prompts=%d, priority=%s)", job.ID, model, len(prompts), priority)
 
 	writeJSON(w, http.StatusAccepted, BatchSubmitResponse{
 		JobID:    job.ID,
@@ -211,33 +140,35 @@ func (h *Handlers) getBatchStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) getQueueStatus(w http.ResponseWriter, r *http.Request) {
-	depth, active, maxGPUs := h.queue.QueueInfo()
+	depth, active, max := h.queue.QueueInfo()
 	writeJSON(w, http.StatusOK, QueueStatusResponse{
 		QueueDepth: depth,
 		ActiveGPUs: active,
-		MaxGPUs:    maxGPUs,
+		MaxGPUs:    max,
 	})
 }
 
 func (h *Handlers) healthCheck(w http.ResponseWriter, r *http.Request) {
-	// Always return healthy for liveness/readiness probes.
-	// Ray dashboard reachability is informational only — we don't want
-	// a slow VPN hop to the GPU node to kill our pod.
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "healthy",
 	})
 }
 
-// deepHealthCheck includes Ray dashboard reachability (for manual debugging, not probes).
 func (h *Handlers) deepHealthCheck(w http.ResponseWriter, r *http.Request) {
 	rayStatus := "reachable"
 	if err := h.ray.Healthz(); err != nil {
 		rayStatus = fmt.Sprintf("unreachable: %v", err)
 	}
 
+	serveStatus := "ready"
+	if err := h.ray.ServeHealthz(); err != nil {
+		serveStatus = fmt.Sprintf("not ready: %v", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":        "healthy",
 		"ray_dashboard": rayStatus,
+		"vllm_serve":    serveStatus,
 	})
 }
 
@@ -264,29 +195,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
-}
-
-// extractResults parses JSON between RESULTS_START and RESULTS_END markers in logs.
-func extractResults(logs string) []map[string]string {
-	startMarker := "RESULTS_START"
-	endMarker := "RESULTS_END"
-
-	startIdx := strings.Index(logs, startMarker)
-	if startIdx == -1 {
-		return nil
-	}
-	startIdx += len(startMarker)
-
-	endIdx := strings.Index(logs[startIdx:], endMarker)
-	if endIdx == -1 {
-		return nil
-	}
-
-	jsonStr := strings.TrimSpace(logs[startIdx : startIdx+endIdx])
-
-	var results []map[string]string
-	if err := json.Unmarshal([]byte(jsonStr), &results); err != nil {
-		return nil
-	}
-	return results
 }
