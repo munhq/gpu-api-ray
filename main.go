@@ -17,7 +17,7 @@ func main() {
 		log.Fatalf("configuration error: %v", err)
 	}
 
-	ray := NewRayClient(cfg.RayDashboardURL)
+	ray := NewRayClient(cfg.RayDashboardURL, cfg.RayServeURL)
 	queue := NewJobQueue(ray, cfg.MaxConcurrent)
 
 	// Graceful shutdown context
@@ -48,32 +48,13 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start HTTP server immediately so liveness/readiness probes pass
 	go func() {
 		log.Printf("gpu-api listening on :%s", cfg.Port)
 		log.Printf("ray dashboard: %s", cfg.RayDashboardURL)
-		log.Printf("vLLM model: %s", cfg.VLLMModel)
+		log.Printf("ray serve: %s", cfg.RayServeURL)
 		log.Printf("max concurrent: %d", cfg.MaxConcurrent)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
-		}
-	}()
-
-	// Deploy vLLM serve app in the background + keep it alive
-	go func() {
-		// Initial deployment
-		ray.EnsureServeApp(cfg.VLLMModel)
-
-		// Reconcile every 30s — redeploy if head restarts
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				ray.EnsureServeApp(cfg.VLLMModel)
-			}
 		}
 	}()
 
