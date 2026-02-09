@@ -18,7 +18,16 @@ func main() {
 	}
 
 	ray := NewRayClient(cfg.RayDashboardURL, cfg.RayServeURL)
-	queue := NewJobQueue(ray, cfg.MaxConcurrent)
+
+	// Connect to Dragonfly/Redis for job persistence
+	var store *JobStore
+	store, err = NewJobStore(cfg.RedisURL, cfg.JobTTLSeconds)
+	if err != nil {
+		log.Printf("WARNING: redis unavailable, falling back to in-memory only: %v", err)
+		store = nil
+	}
+
+	queue := NewJobQueue(ray, store, cfg.MaxConcurrent)
 
 	// Graceful shutdown context
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -53,6 +62,9 @@ func main() {
 		log.Printf("ray dashboard: %s", cfg.RayDashboardURL)
 		log.Printf("ray serve: %s", cfg.RayServeURL)
 		log.Printf("max concurrent: %d", cfg.MaxConcurrent)
+		if store != nil {
+			log.Printf("redis: %s (job ttl=%ds)", cfg.RedisURL, cfg.JobTTLSeconds)
+		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -66,6 +78,9 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("shutdown error: %v", err)
+	}
+	if store != nil {
+		store.Close()
 	}
 	log.Println("server stopped")
 }

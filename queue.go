@@ -94,6 +94,7 @@ func (h *jobHeap) Pop() any {
 type JobQueue struct {
 	mu            sync.Mutex
 	ray           *RayClient
+	store         *JobStore // nil if Redis unavailable (fallback to in-memory only)
 	maxConcurrent int
 	activeSlots   int
 	seqCounter    int
@@ -103,9 +104,10 @@ type JobQueue struct {
 	ctx           context.Context
 }
 
-func NewJobQueue(ray *RayClient, maxConcurrent int) *JobQueue {
+func NewJobQueue(ray *RayClient, store *JobStore, maxConcurrent int) *JobQueue {
 	q := &JobQueue{
 		ray:           ray,
+		store:         store,
 		maxConcurrent: maxConcurrent,
 		pq:            make(jobHeap, 0),
 		jobs:          make(map[string]*Job),
@@ -136,15 +138,26 @@ func (q *JobQueue) Enqueue(req InferenceRequest, priority string) *Job {
 	heap.Push(&q.pq, job)
 	queueDepth.Set(float64(q.pq.Len()))
 
+	q.persistJob(job)
 	q.signalDispatch()
 	return job
 }
 
-// GetJob returns the job state. Returns nil if not found.
+// GetJob returns the job state. Checks in-memory first, falls through to Redis.
 func (q *JobQueue) GetJob(id string) *Job {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.jobs[id]
+	job := q.jobs[id]
+	q.mu.Unlock()
+
+	if job != nil {
+		return job
+	}
+
+	// Fall through to Redis for completed jobs that may have been evicted from memory
+	if q.store != nil {
+		return q.store.Load(q.ctx, id)
+	}
+	return nil
 }
 
 // QueueInfo returns current queue depth and active slot count.
@@ -201,6 +214,8 @@ func (q *JobQueue) tryDispatch() {
 		log.Printf("dispatched job %s (priority=%s, waited=%.1fs, slots=%d/%d)",
 			job.ID, job.PriorityName, waitDuration, q.activeSlots, q.maxConcurrent)
 
+		q.persistJob(job)
+
 		// Execute inference in a goroutine — HTTP call blocks until vLLM responds
 		go q.executeJob(job)
 	}
@@ -249,6 +264,8 @@ func (q *JobQueue) executeJob(job *Job) {
 		log.Printf("job %s SUCCEEDED in %.1fs (%d prompts)", job.ID, duration, len(resp.Choices))
 	}
 
+	q.persistJob(job)
+
 	jobDuration.Observe(duration)
 	q.activeSlots--
 	gpusActive.Set(float64(q.activeSlots))
@@ -256,4 +273,12 @@ func (q *JobQueue) executeJob(job *Job) {
 
 	// Signal dispatcher to pick up next queued job
 	q.signalDispatch()
+}
+
+// persistJob saves job state to Redis (non-blocking, best-effort).
+func (q *JobQueue) persistJob(job *Job) {
+	if q.store == nil {
+		return
+	}
+	q.store.Save(q.ctx, job)
 }

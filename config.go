@@ -11,9 +11,11 @@ type Config struct {
 	APIKey           string
 	RayDashboardURL  string // Ray dashboard at :8265
 	RayServeURL      string // Ray Serve vLLM endpoint at :8000
+	RedisURL         string // Dragonfly/Redis for job persistence
 	DefaultModel     string
 	DefaultMaxTokens int
 	MaxConcurrent    int // max concurrent inference requests to vLLM
+	JobTTLSeconds    int // TTL for completed jobs in Redis
 }
 
 func LoadConfig() (*Config, error) {
@@ -22,9 +24,11 @@ func LoadConfig() (*Config, error) {
 		APIKey:           os.Getenv("API_KEY"),
 		RayDashboardURL:  envOrDefault("RAY_DASHBOARD_URL", "http://raycluster-batch-inference-head-svc:8265"),
 		RayServeURL:      envOrDefault("RAY_SERVE_URL", "http://raycluster-batch-inference-serve-svc:8000"),
+		RedisURL:         envOrDefault("REDIS_URL", "dragonfly.gpu-workloads.svc.cluster.local:6379"),
 		DefaultModel:     envOrDefault("DEFAULT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"),
 		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 50),
 		MaxConcurrent:    envOrDefaultInt("MAX_CONCURRENT", 4),
+		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 3600),
 	}
 
 	if cfg.APIKey == "" {
