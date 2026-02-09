@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -94,9 +95,9 @@ func (c *RayClient) Complete(ctx context.Context, req CompletionRequest) (*Compl
 			}
 			continue // Retry on network errors
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
+			defer resp.Body.Close()
 			var result CompletionResponse
 			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 				return nil, fmt.Errorf("decode completion response: %w", err)
@@ -104,18 +105,19 @@ func (c *RayClient) Complete(ctx context.Context, req CompletionRequest) (*Compl
 			return &result, nil
 		}
 
-		// Read error response
+		// Read and close error response body before potential retry
 		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		errMsg := fmt.Sprintf("vLLM returned %d: %s", resp.StatusCode, string(b))
 
 		// Retry on server errors (5xx) but not client errors (4xx)
 		if resp.StatusCode >= 500 && attempt < maxRetries {
 			continue
 		}
-		return nil, fmt.Errorf(errMsg)
+		return nil, errors.New(errMsg)
 	}
 
-	return nil, fmt.Errorf("unreachable code")
+	return nil, errors.New("unreachable: retry loop exited without returning")
 }
 
 // ServeHealthz checks if the vLLM serve endpoint is reachable.

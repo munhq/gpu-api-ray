@@ -16,6 +16,7 @@ type Config struct {
 	RedisURL         string // Dragonfly/Redis for job persistence
 	DefaultModel     string
 	DefaultMaxTokens int
+	MaxMaxTokens     int // upper bound for max_tokens in requests
 	MaxConcurrent    int // max concurrent inference requests to vLLM
 	JobTTLSeconds    int // TTL for completed jobs in Redis
 }
@@ -28,7 +29,8 @@ func LoadConfig() (*Config, error) {
 		RayServeURL:      envOrDefault("RAY_SERVE_URL", "http://raycluster-batch-inference-serve-svc:8000"),
 		RedisURL:         envOrDefault("REDIS_URL", "dragonfly.gpu-workloads.svc.cluster.local:6379"),
 		DefaultModel:     envOrDefault("DEFAULT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"),
-		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 50),
+		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 512),
+		MaxMaxTokens:     envOrDefaultInt("MAX_MAX_TOKENS", 131072),
 		MaxConcurrent:    envOrDefaultInt("MAX_CONCURRENT", 4),
 		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 604800),
 	}
@@ -75,8 +77,11 @@ func validateConfig(cfg *Config) error {
 	}
 
 	// Numeric range validation
-	if cfg.DefaultMaxTokens < 1 || cfg.DefaultMaxTokens > 8192 {
-		return fmt.Errorf("DEFAULT_MAX_TOKENS must be between 1 and 8192, got: %d", cfg.DefaultMaxTokens)
+	if cfg.MaxMaxTokens < 1 || cfg.MaxMaxTokens > 131072 {
+		return fmt.Errorf("MAX_MAX_TOKENS must be between 1 and 131072, got: %d", cfg.MaxMaxTokens)
+	}
+	if cfg.DefaultMaxTokens < 1 || cfg.DefaultMaxTokens > cfg.MaxMaxTokens {
+		return fmt.Errorf("DEFAULT_MAX_TOKENS must be between 1 and %d (MAX_MAX_TOKENS), got: %d", cfg.MaxMaxTokens, cfg.DefaultMaxTokens)
 	}
 	if cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 100 {
 		return fmt.Errorf("MAX_CONCURRENT must be between 1 and 100, got: %d", cfg.MaxConcurrent)

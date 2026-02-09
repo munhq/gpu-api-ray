@@ -288,12 +288,13 @@ func (q *JobQueue) executeJob(job *Job) {
 		job.Message = "completed"
 
 		// Convert vLLM response to our results format (prompt + output pairs)
-		results := make([]map[string]string, len(resp.Choices))
+		results := make([]map[string]string, len(job.InferenceReq.Prompts))
 		for _, choice := range resp.Choices {
-			prompt := ""
-			if choice.Index < len(job.InferenceReq.Prompts) {
-				prompt = job.InferenceReq.Prompts[choice.Index]
+			if choice.Index < 0 || choice.Index >= len(results) {
+				log.Printf("job %s: vLLM returned out-of-range choice index %d (prompts=%d), skipping", job.ID, choice.Index, len(results))
+				continue
 			}
+			prompt := job.InferenceReq.Prompts[choice.Index]
 			results[choice.Index] = map[string]string{
 				"prompt": prompt,
 				"output": choice.Text,

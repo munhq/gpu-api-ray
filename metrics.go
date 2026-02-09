@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -102,6 +103,16 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// normalizeRoute maps raw URL paths to route patterns to prevent
+// unbounded cardinality from dynamic path segments (e.g., job IDs).
+func normalizeRoute(path string) string {
+	// /v1/batches/{anything} → /v1/batches/{job_id}
+	if strings.HasPrefix(path, "/v1/batches/") {
+		return "/v1/batches/{job_id}"
+	}
+	return path
+}
+
 func metricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -109,8 +120,8 @@ func metricsMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		duration := time.Since(start).Seconds()
 
-		path := r.URL.Path
-		httpRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rec.statusCode)).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+		route := normalizeRoute(r.URL.Path)
+		httpRequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(rec.statusCode)).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, route).Observe(duration)
 	})
 }
