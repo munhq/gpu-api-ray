@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"log"
 	"net/http"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 func main() {
 	cfg, err := LoadConfig()
@@ -38,6 +42,12 @@ func main() {
 	h := NewHandlers(cfg, ray, queue)
 
 	mux := http.NewServeMux()
+
+	// Dashboard
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(dashboardHTML)
+	})
 
 	// Public endpoints
 	mux.HandleFunc("GET /health", h.healthCheck)
