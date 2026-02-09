@@ -33,12 +33,6 @@ type BatchStatusResponse struct {
 	Message  string              `json:"message,omitempty"`
 }
 
-type QueueStatusResponse struct {
-	QueueDepth int `json:"queue_depth"`
-	ActiveGPUs int `json:"active_gpus"`
-	MaxGPUs    int `json:"max_gpus"`
-}
-
 type BatchListItem struct {
 	JobID           string     `json:"job_id"`
 	Status          string     `json:"status"`
@@ -119,8 +113,7 @@ func (h *Handlers) submitBatch(w http.ResponseWriter, r *http.Request) {
 		prompts[i] = item["prompt"]
 	}
 
-	// Enqueue — the dispatcher will send to the persistent vLLM serve endpoint
-	job := h.queue.Enqueue(InferenceRequest{
+	job := h.queue.Submit(InferenceRequest{
 		Model:     model,
 		Prompts:   prompts,
 		MaxTokens: maxTokens,
@@ -202,11 +195,9 @@ func (h *Handlers) listBatches(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) getQueueStatus(w http.ResponseWriter, r *http.Request) {
-	depth, active, max := h.queue.QueueInfo()
-	writeJSON(w, http.StatusOK, QueueStatusResponse{
-		QueueDepth: depth,
-		ActiveGPUs: active,
-		MaxGPUs:    max,
+	active := h.queue.QueueInfo()
+	writeJSON(w, http.StatusOK, map[string]int{
+		"active_jobs": active,
 	})
 }
 

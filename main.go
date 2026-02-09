@@ -20,7 +20,6 @@ func main() {
 
 	ray := NewRayClient(cfg.RayDashboardURL, cfg.RayServeURL)
 
-	// Connect to Dragonfly/Redis for job persistence
 	var store *JobStore
 	store, err = NewJobStore(cfg.RedisURL, cfg.JobTTLSeconds)
 	if err != nil {
@@ -28,13 +27,13 @@ func main() {
 		store = nil
 	}
 
-	queue := NewJobQueue(ray, store, cfg.MaxConcurrent)
+	queue := NewJobQueue(ray, store)
 
 	// Graceful shutdown context
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	queue.Start(ctx)
+	queue.SetContext(ctx)
 
 	h := NewHandlers(cfg, ray, queue)
 
@@ -44,7 +43,7 @@ func main() {
 	mux.HandleFunc("GET /health", h.healthCheck)
 	mux.HandleFunc("GET /health/deep", h.deepHealthCheck)
 	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /v1/batches", h.listBatches) // unauthenticated: read-only, cluster-internal
+	mux.HandleFunc("GET /v1/batches", h.listBatches)
 
 	// Authenticated endpoints
 	mux.HandleFunc("POST /v1/batches", h.apiKeyAuth(h.submitBatch))
@@ -63,7 +62,6 @@ func main() {
 		log.Printf("gpu-api listening on :%s", cfg.Port)
 		log.Printf("ray dashboard: %s", cfg.RayDashboardURL)
 		log.Printf("ray serve: %s", cfg.RayServeURL)
-		log.Printf("max concurrent: %d", cfg.MaxConcurrent)
 		if store != nil {
 			log.Printf("redis: %s (job ttl=%ds)", cfg.RedisURL, cfg.JobTTLSeconds)
 		}

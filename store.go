@@ -20,7 +20,6 @@ type JobStore struct {
 // jobRecord is the serializable form of a Job for Redis storage.
 type jobRecord struct {
 	ID           string              `json:"id"`
-	Priority     int                 `json:"priority"`
 	PriorityName string              `json:"priority_name"`
 	State        string              `json:"state"`
 	Model        string              `json:"model"`
@@ -65,7 +64,6 @@ func jobKey(id string) string {
 func (s *JobStore) Save(ctx context.Context, job *Job) {
 	rec := jobRecord{
 		ID:           job.ID,
-		Priority:     job.Priority,
 		PriorityName: job.PriorityName,
 		State:        job.State,
 		Model:        job.InferenceReq.Model,
@@ -102,9 +100,12 @@ func (s *JobStore) Load(ctx context.Context, id string) *Job {
 		return nil
 	}
 
+	return recordToJob(&rec)
+}
+
+func recordToJob(rec *jobRecord) *Job {
 	return &Job{
 		ID:           rec.ID,
-		Priority:     rec.Priority,
 		PriorityName: rec.PriorityName,
 		State:        rec.State,
 		InferenceReq: InferenceRequest{
@@ -126,7 +127,7 @@ func (s *JobStore) ListRecent(ctx context.Context, limit int) []*Job {
 	iter := s.client.Scan(ctx, 0, "job:*", 0).Iterator()
 	for iter.Next(ctx) {
 		keys = append(keys, iter.Val())
-		if len(keys) >= limit*2 { // over-fetch since we'll sort and trim
+		if len(keys) >= limit*2 {
 			break
 		}
 	}
@@ -154,22 +155,7 @@ func (s *JobStore) ListRecent(ctx context.Context, limit int) []*Job {
 		if err := json.Unmarshal([]byte(str), &rec); err != nil {
 			continue
 		}
-		jobs = append(jobs, &Job{
-			ID:           rec.ID,
-			Priority:     rec.Priority,
-			PriorityName: rec.PriorityName,
-			State:        rec.State,
-			InferenceReq: InferenceRequest{
-				Model:     rec.Model,
-				Prompts:   rec.Prompts,
-				MaxTokens: rec.MaxTokens,
-			},
-			Results:     rec.Results,
-			Message:     rec.Message,
-			EnqueuedAt:  rec.EnqueuedAt,
-			StartedAt:   rec.StartedAt,
-			CompletedAt: rec.CompletedAt,
-		})
+		jobs = append(jobs, recordToJob(&rec))
 	}
 
 	// Sort by enqueued time descending (most recent first)
