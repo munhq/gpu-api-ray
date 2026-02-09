@@ -28,7 +28,7 @@ func LoadConfig() (*Config, error) {
 		RayDashboardURL:  envOrDefault("RAY_DASHBOARD_URL", "http://raycluster-batch-inference-head-svc:8265"),
 		RayServeURL:      envOrDefault("RAY_SERVE_URL", "http://raycluster-batch-inference-serve-svc:8000"),
 		RedisURL:         envOrDefault("REDIS_URL", "dragonfly.gpu-workloads.svc.cluster.local:6379"),
-		DefaultModel:     envOrDefault("DEFAULT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct"),
+		DefaultModel:     envOrDefault("DEFAULT_MODEL", "qwen2.5-0.5b-instruct"),
 		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 512),
 		MaxMaxTokens:     envOrDefaultInt("MAX_MAX_TOKENS", 131072),
 		MaxConcurrent:    envOrDefaultInt("MAX_CONCURRENT", 4),
