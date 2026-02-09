@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -31,11 +33,78 @@ func LoadConfig() (*Config, error) {
 		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 604800),
 	}
 
-	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("API_KEY environment variable is required")
+	if err := validateConfig(cfg); err != nil {
+		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
 	return cfg, nil
+}
+
+func validateConfig(cfg *Config) error {
+	// Required fields
+	if cfg.APIKey == "" {
+		return fmt.Errorf("API_KEY environment variable is required")
+	}
+	if len(cfg.APIKey) < 8 {
+		return fmt.Errorf("API_KEY must be at least 8 characters long")
+	}
+
+	// Port validation
+	port, err := strconv.Atoi(cfg.Port)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("PORT must be a valid port number (1-65535), got: %s", cfg.Port)
+	}
+
+	// URL validation
+	if err := validateURL("RAY_DASHBOARD_URL", cfg.RayDashboardURL); err != nil {
+		return err
+	}
+	if err := validateURL("RAY_SERVE_URL", cfg.RayServeURL); err != nil {
+		return err
+	}
+
+	// Redis URL validation (basic format check)
+	if cfg.RedisURL != "" {
+		parts := strings.Split(cfg.RedisURL, ":")
+		if len(parts) != 2 {
+			return fmt.Errorf("REDIS_URL must be in format host:port, got: %s", cfg.RedisURL)
+		}
+		if port, err := strconv.Atoi(parts[1]); err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("REDIS_URL port must be valid (1-65535), got: %s", parts[1])
+		}
+	}
+
+	// Numeric range validation
+	if cfg.DefaultMaxTokens < 1 || cfg.DefaultMaxTokens > 8192 {
+		return fmt.Errorf("DEFAULT_MAX_TOKENS must be between 1 and 8192, got: %d", cfg.DefaultMaxTokens)
+	}
+	if cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 100 {
+		return fmt.Errorf("MAX_CONCURRENT must be between 1 and 100, got: %d", cfg.MaxConcurrent)
+	}
+	if cfg.JobTTLSeconds < 3600 || cfg.JobTTLSeconds > 2592000 { // 1 hour to 30 days
+		return fmt.Errorf("JOB_TTL_SECONDS must be between 3600 and 2592000, got: %d", cfg.JobTTLSeconds)
+	}
+
+	// Model name validation (basic)
+	if strings.TrimSpace(cfg.DefaultModel) == "" {
+		return fmt.Errorf("DEFAULT_MODEL cannot be empty")
+	}
+
+	return nil
+}
+
+func validateURL(name, urlStr string) error {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL: %w", name, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https scheme, got: %s", name, u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s must have a valid host", name)
+	}
+	return nil
 }
 
 func envOrDefault(key, defaultVal string) string {

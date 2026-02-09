@@ -100,7 +100,7 @@ type JobQueue struct {
 	activeSlots   int
 	seqCounter    int
 	pq            jobHeap
-	jobs          map[string]*Job
+	jobs          map[string]*Job // only active and queued jobs
 	dispatch      chan struct{}
 	ctx           context.Context
 }
@@ -144,51 +144,46 @@ func (q *JobQueue) Enqueue(req InferenceRequest, priority string) *Job {
 	return job
 }
 
-// GetJob returns the job state. Checks in-memory first, falls through to Redis.
+// GetJob returns the job state. Checks in-memory for active/queued jobs, Redis for completed jobs.
 func (q *JobQueue) GetJob(id string) *Job {
 	q.mu.Lock()
 	job := q.jobs[id]
 	q.mu.Unlock()
 
 	if job != nil {
-		return job
+		return job // Active or queued job from memory
 	}
 
-	// Fall through to Redis for completed jobs that may have been evicted from memory
+	// Check Redis for completed jobs
 	if q.store != nil {
 		return q.store.Load(q.ctx, id)
 	}
 	return nil
 }
 
-// ListJobs returns recent jobs, merging in-memory state with Redis.
+// ListJobs returns recent jobs, prioritizing Redis data for completed jobs.
 func (q *JobQueue) ListJobs(limit int) []*Job {
-	q.mu.Lock()
-	// Collect all in-memory jobs
-	inMemory := make(map[string]*Job, len(q.jobs))
-	for id, job := range q.jobs {
-		inMemory[id] = job
-	}
-	q.mu.Unlock()
-
-	// Start with in-memory jobs
-	seen := make(map[string]bool, len(inMemory))
 	var result []*Job
-	for _, job := range inMemory {
-		result = append(result, job)
-		seen[job.ID] = true
-	}
+	seen := make(map[string]bool)
 
-	// Merge Redis jobs that aren't already in memory
+	// First get from Redis (completed jobs + any still there)
 	if q.store != nil {
 		redisJobs := q.store.ListRecent(q.ctx, limit)
 		for _, job := range redisJobs {
-			if !seen[job.ID] {
-				result = append(result, job)
-				seen[job.ID] = true
-			}
+			result = append(result, job)
+			seen[job.ID] = true
 		}
 	}
+
+	// Then add any in-memory jobs not already seen (active/queued)
+	q.mu.Lock()
+	for _, job := range q.jobs {
+		if !seen[job.ID] {
+			result = append(result, job)
+			seen[job.ID] = true
+		}
+	}
+	q.mu.Unlock()
 
 	// Sort by enqueued time descending
 	sort.Slice(result, func(i, j int) bool {
@@ -316,6 +311,12 @@ func (q *JobQueue) executeJob(job *Job) {
 	}
 
 	q.persistJob(job)
+
+	// Remove completed jobs from memory immediately (Redis is source of truth)
+	if job.State == JobStateSucceeded || job.State == JobStateFailed {
+		delete(q.jobs, job.ID)
+		log.Printf("removed completed job %s from memory (state: %s)", job.ID, job.State)
+	}
 
 	jobDuration.Observe(duration)
 	q.activeSlots--
