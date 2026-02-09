@@ -17,12 +17,17 @@ func main() {
 		log.Fatalf("configuration error: %v", err)
 	}
 
-	// Use KubeRayClient for Kubernetes-native job submission with Kueue integration
-	ray, err := NewKubeRayClient(cfg.Namespace, cfg.RayClusterName, cfg.KueueQueueName)
-	if err != nil {
-		log.Fatalf("failed to create KubeRay client: %v", err)
-	}
-	h := NewHandlers(cfg, ray)
+	ray := NewRayClient(cfg.RayDashboardURL)
+	queue := NewJobQueue(ray, cfg.MaxGPUs)
+
+	// Graceful shutdown context
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Start dispatcher + reconciler goroutines
+	queue.Start(ctx)
+
+	h := NewHandlers(cfg, ray, queue)
 
 	mux := http.NewServeMux()
 
@@ -34,6 +39,7 @@ func main() {
 	// Authenticated endpoints
 	mux.HandleFunc("POST /v1/batches", h.apiKeyAuth(h.submitBatch))
 	mux.HandleFunc("GET /v1/batches/{job_id}", h.apiKeyAuth(h.getBatchStatus))
+	mux.HandleFunc("GET /v1/queue", h.apiKeyAuth(h.getQueueStatus))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -43,14 +49,10 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
 		log.Printf("gpu-api listening on :%s", cfg.Port)
-		log.Printf("target RayCluster: %s/%s", cfg.Namespace, cfg.RayClusterName)
-		log.Printf("kueue queue: %s", cfg.KueueQueueName)
+		log.Printf("ray dashboard: %s", cfg.RayDashboardURL)
+		log.Printf("max GPUs: %d", cfg.MaxGPUs)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}

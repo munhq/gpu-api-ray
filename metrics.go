@@ -41,6 +41,27 @@ var (
 		Help:    "Time from job submission to completion as observed by status checks.",
 		Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
 	})
+
+	queueDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "gpu_api_queue_depth",
+		Help: "Number of jobs waiting in the priority queue.",
+	})
+
+	gpusActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "gpu_api_gpus_active",
+		Help: "Number of GPUs currently in use by running jobs.",
+	})
+
+	gpusTotal = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "gpu_api_gpus_total",
+		Help: "Total GPU slots configured (max concurrent jobs).",
+	})
+
+	queueWaitSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "gpu_api_queue_wait_seconds",
+		Help:    "Time from enqueue to submission to Ray.",
+		Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300, 600},
+	})
 )
 
 type statusRecorder struct {
