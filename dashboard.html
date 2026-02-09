@@ -107,6 +107,19 @@
                 </div>
 
                 <div class="flex items-center gap-3">
+                    <!-- Job limit selector -->
+                    <div class="flex items-center gap-2">
+                        <label for="job-limit" class="text-xs text-slate-400">Show</label>
+                        <select id="job-limit" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-md px-2 py-1.5 focus:ring-blue-500 focus:border-blue-500 cursor-pointer">
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="200" selected>200</option>
+                            <option value="500">500</option>
+                            <option value="1000">1000</option>
+                            <option value="0">All</option>
+                        </select>
+                    </div>
+
                     <!-- Auto-refresh toggle -->
                     <div class="flex items-center gap-2">
                         <label class="relative inline-flex items-center cursor-pointer">
@@ -399,7 +412,9 @@
         // ---- Data Fetching ----
         async function fetchJobs() {
             try {
-                var data = await apiFetchJSON('/v1/batches?limit=200');
+                var limitVal = document.getElementById('job-limit').value;
+                var url = limitVal === '0' ? '/v1/batches?limit=10000' : '/v1/batches?limit=' + limitVal;
+                var data = await apiFetchJSON(url);
                 jobs = data.jobs || [];
                 updateSummaryCards();
                 updateCharts();
@@ -989,6 +1004,11 @@
             });
 
             manualRefreshBtn.addEventListener('click', function() {
+                fetchJobs();
+            });
+
+            // Job limit selector
+            document.getElementById('job-limit').addEventListener('change', function() {
                 fetchJobs();
             });
 
