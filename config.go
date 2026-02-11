@@ -1,12 +1,22 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 )
+
+// ModelDef describes a model the system can serve.
+type ModelDef struct {
+	ID                    string `json:"id"`
+	Source                string `json:"source"`
+	MinVRAM               int    `json:"minVRAM"`
+	MinGPUs               int    `json:"minGPUs"`
+	TargetOngoingRequests int    `json:"targetOngoingRequests"`
+}
 
 type Config struct {
 	Port             string
@@ -18,19 +28,33 @@ type Config struct {
 	DefaultMaxTokens int
 	MaxMaxTokens     int // upper bound for max_tokens in requests
 	JobTTLSeconds    int // TTL for completed jobs in Redis
+	SessionTTLSeconds    int    // TTL for chat sessions in Redis (DB 2)
+	WorkerHealthInterval int    // Worker health check interval in seconds
+	ModelCatalog     []ModelDef // known models, loaded from MODELS_CONFIG env
 }
 
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		Port:             envOrDefault("PORT", "8000"),
 		APIKey:           os.Getenv("API_KEY"),
-		RayDashboardURL:  envOrDefault("RAY_DASHBOARD_URL", "http://raycluster-batch-inference-head-svc:8265"),
-		RayServeURL:      envOrDefault("RAY_SERVE_URL", "http://raycluster-batch-inference-serve-svc:8000"),
+		RayDashboardURL:  envOrDefault("RAY_DASHBOARD_URL", "http://rayservice-head-svc:8265"),
+		RayServeURL:      envOrDefault("RAY_SERVE_URL", "http://rayservice-serve-svc:8000"),
 		RedisURL:         envOrDefault("REDIS_URL", "dragonfly.gpu-workloads.svc.cluster.local:6379"),
 		DefaultModel:     envOrDefault("DEFAULT_MODEL", "qwen2.5-0.5b-instruct"),
 		DefaultMaxTokens: envOrDefaultInt("DEFAULT_MAX_TOKENS", 512),
 		MaxMaxTokens:     envOrDefaultInt("MAX_MAX_TOKENS", 131072),
-		JobTTLSeconds:    envOrDefaultInt("JOB_TTL_SECONDS", 604800),
+		JobTTLSeconds:        envOrDefaultInt("JOB_TTL_SECONDS", 604800),
+		SessionTTLSeconds:    envOrDefaultInt("SESSION_TTL_SECONDS", 172800),
+		WorkerHealthInterval: envOrDefaultInt("WORKER_HEALTH_INTERVAL", 15),
+	}
+
+	// Parse model catalog from JSON env var (optional)
+	if mc := os.Getenv("MODELS_CONFIG"); mc != "" {
+		var models []ModelDef
+		if err := json.Unmarshal([]byte(mc), &models); err != nil {
+			return nil, fmt.Errorf("MODELS_CONFIG must be valid JSON array: %w", err)
+		}
+		cfg.ModelCatalog = models
 	}
 
 	if err := validateConfig(cfg); err != nil {
