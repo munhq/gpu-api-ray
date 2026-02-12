@@ -101,6 +101,22 @@ var (
 		Name: "gpu_api_queued_requests_active",
 		Help: "Number of currently queued requests waiting for capacity.",
 	}, []string{"model"})
+
+	provisioningDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "gpu_api_provisioning_duration_seconds",
+		Help:    "Time from provisioning start to model ready.",
+		Buckets: []float64{30, 60, 90, 120, 180, 240, 300, 600},
+	}, []string{"model"})
+
+	provisioningActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gpu_api_provisioning_active",
+		Help: "Whether an instance is currently active for a model (1=active, 0=none).",
+	}, []string{"model"})
+
+	provisioningFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gpu_api_provisioning_failures_total",
+		Help: "Total provisioning failures by model.",
+	}, []string{"model"})
 )
 
 type statusRecorder struct {

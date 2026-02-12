@@ -3,19 +3,74 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 )
 
-// ModelDef describes a model the system can serve.
-type ModelDef struct {
-	ID                    string `json:"id"`
-	Source                string `json:"source"`
-	MinVRAM               int    `json:"minVRAM"`
-	MinGPUs               int    `json:"minGPUs"`
-	TargetOngoingRequests int    `json:"targetOngoingRequests"`
+// DefaultPerGPUVRAM is the reference GPU size used for auto-calculating
+// GPU count when no specific GPU type is targeted. 24GB covers RTX 3090/4090.
+const DefaultPerGPUVRAM = 24
+
+// ModelConfig describes a model the system can serve, with rich provisioning metadata.
+// VRAM is the primary input — GPU count, RAM, disk are auto-calculated.
+type ModelConfig struct {
+	ID     string `json:"id"`     // API request name (e.g., "glm-4-7")
+	Source string `json:"source"` // HuggingFace source (e.g., "hf:zai-org/GLM-4.7")
+
+	// GPU requirements — vramRequired is the primary input
+	VRAMRequired int `json:"vramRequired"` // GB total VRAM needed to load this model
+	MaxGPUCount  int `json:"maxGpuCount"`  // optional upper bound on GPU count (0 = no limit)
+	MaxModelLen  int `json:"maxModelLen"`  // vLLM max_model_len
+
+	// Scaling behavior
+	AlwaysActive          bool `json:"alwaysActive"`          // true = keep warm, never scale to zero
+	MinReplicas           int  `json:"minReplicas"`           // Ray Serve min replicas (0 = cold)
+	MaxReplicas           int  `json:"maxReplicas"`           // Ray Serve max replicas
+	TargetOngoingRequests int  `json:"targetOngoingRequests"` // Ray Serve autoscale target
+
+	// Instance mode: "ray-worker" (default) joins Ray cluster, "full-node" joins K8s via VPN
+	NodeType string `json:"nodeType"`
+
+	// Provider preferences (per-model override; falls back to global)
+	CapacityType   string  `json:"capacityType"`   // "spot" or "on-demand"
+	MaxPricePerGPU float64 `json:"maxPricePerGPU"` // $/hr per GPU, 0 = no limit
+
+	// Optional model pre-caching from object storage
+	CacheURL string `json:"cacheUrl"` // rclone-compatible URL (e.g., "r2:model-cache/glm-4-7")
+
+	// Computed fields (populated by ComputeRequirements)
+	GPUCount          int `json:"-"` // ceil(vramRequired / perGPUVRAM)
+	MinRAM            int `json:"-"` // vramRequired * 1.1
+	MinDisk           int `json:"-"` // vramRequired * 2.5
+	TensorParallelSize int `json:"-"` // same as GPUCount
+}
+
+// ComputeRequirements derives GPU count, RAM, disk from vramRequired and
+// the given per-GPU VRAM size. Call this after loading config.
+func (m *ModelConfig) ComputeRequirements(perGPUVRAM int) {
+	if perGPUVRAM <= 0 {
+		perGPUVRAM = DefaultPerGPUVRAM
+	}
+	if m.VRAMRequired <= 0 {
+		m.GPUCount = 1
+		m.TensorParallelSize = 1
+		m.MinRAM = 8
+		m.MinDisk = 20
+		return
+	}
+	m.GPUCount = int(math.Ceil(float64(m.VRAMRequired) / float64(perGPUVRAM)))
+	if m.GPUCount < 1 {
+		m.GPUCount = 1
+	}
+	if m.MaxGPUCount > 0 && m.GPUCount > m.MaxGPUCount {
+		m.GPUCount = m.MaxGPUCount
+	}
+	m.TensorParallelSize = m.GPUCount
+	m.MinRAM = int(math.Ceil(float64(m.VRAMRequired) * 1.1))
+	m.MinDisk = int(math.Ceil(float64(m.VRAMRequired) * 2.5))
 }
 
 type Config struct {
@@ -30,7 +85,8 @@ type Config struct {
 	JobTTLSeconds    int // TTL for completed jobs in Redis
 	SessionTTLSeconds    int    // TTL for chat sessions in Redis (DB 2)
 	WorkerHealthInterval int    // Worker health check interval in seconds
-	ModelCatalog     []ModelDef // known models, loaded from MODELS_CONFIG env
+	ModelCatalog     []ModelConfig            // ordered list of known models
+	Models           map[string]*ModelConfig  // keyed by model ID for fast lookup
 }
 
 func LoadConfig() (*Config, error) {
@@ -48,13 +104,25 @@ func LoadConfig() (*Config, error) {
 		WorkerHealthInterval: envOrDefaultInt("WORKER_HEALTH_INTERVAL", 15),
 	}
 
-	// Parse model catalog from JSON env var (optional)
+	// Parse model catalog from JSON env var (optional).
+	// Accepts the new ModelConfig format (vramRequired, alwaysActive, etc).
 	if mc := os.Getenv("MODELS_CONFIG"); mc != "" {
-		var models []ModelDef
+		var models []ModelConfig
 		if err := json.Unmarshal([]byte(mc), &models); err != nil {
 			return nil, fmt.Errorf("MODELS_CONFIG must be valid JSON array: %w", err)
 		}
 		cfg.ModelCatalog = models
+	}
+
+	// Build the Models map and compute derived requirements.
+	cfg.Models = make(map[string]*ModelConfig, len(cfg.ModelCatalog))
+	for i := range cfg.ModelCatalog {
+		m := &cfg.ModelCatalog[i]
+		if m.NodeType == "" {
+			m.NodeType = "ray-worker" // default: join Ray cluster directly
+		}
+		m.ComputeRequirements(DefaultPerGPUVRAM)
+		cfg.Models[m.ID] = m
 	}
 
 	if err := validateConfig(cfg); err != nil {
