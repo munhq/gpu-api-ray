@@ -6,10 +6,15 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"internal/provider"
+	"internal/provider"
+	"internal/provider"
+	"internal/provider"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -56,8 +61,28 @@ func main() {
 	// Router for worker monitoring (kept for /v1/workers endpoint)
 	router := NewRouter(sessionStore, time.Duration(cfg.WorkerHealthInterval)*time.Second)
 
+	// Provisioner — directly triggers GPU provisioning when models are cold.
+	// Replaces the KEDA → demand-pod → the provisioner chain.
+	var provisioner *Provisioner
+	if len(cfg.Models) > 0 {
+		k8sClient := NewClaimClient(os.Getenv("CLAIM_NAMESPACE"))
+		rayHeadAddr := os.Getenv("RAY_HEAD_GCS_ADDRESS")
+		provisioner = NewProvisioner(
+			buildProviderRegistry(),
+			cfg.RedisURL,
+			cfg.Models,
+			discovery,
+			k8sClient,
+			rayHeadAddr,
+		)
+		// Wire full-node secrets (optional — only needed if any model uses nodeType: "full-node")
+		provisioner.netbirdSetupKey = os.Getenv("NETBIRD_SETUP_KEY")
+		provisioner.k8sJoinURL = os.Getenv("K8S_JOIN_URL")
+		provisioner.k8sJoinToken = os.Getenv("K8S_JOIN_TOKEN")
+	}
+
 	// Chat handler — forwards to RayService, queues when model unavailable
-	chatHandler := NewChatHandler(cfg, sessionStore, reqQueue, discovery)
+	chatHandler := NewChatHandler(cfg, sessionStore, reqQueue, discovery, provisioner)
 
 	// Graceful shutdown context
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -73,6 +98,10 @@ func main() {
 	}
 	if sessionStore != nil {
 		go sessionStore.RunSessionCounter(ctx, 30*time.Second)
+	}
+	if provisioner != nil {
+		provisioner.PublishModelConfig(ctx)
+		go provisioner.EnsureAlwaysActive(ctx)
 	}
 
 	h := NewHandlers(cfg, ray, queue)
@@ -133,6 +162,16 @@ func main() {
 		log.Printf("model discovery: polling every 10s")
 		if len(cfg.ModelCatalog) > 0 {
 			log.Printf("model catalog: %d models configured", len(cfg.ModelCatalog))
+			for _, m := range cfg.ModelCatalog {
+				mode := "cold"
+				if m.AlwaysActive {
+					mode = "always-active"
+				}
+				log.Printf("  model %s: vram=%dGB gpus=%d tp=%d %s", m.ID, m.VRAMRequired, m.GPUCount, m.TensorParallelSize, mode)
+			}
+		}
+		if provisioner != nil {
+			log.Printf("provisioner: enabled (%d providers)", len(buildProviderRegistry().List()))
 		}
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
@@ -157,5 +196,32 @@ func main() {
 	if reqQueue != nil {
 		reqQueue.Close()
 	}
+	if provisioner != nil {
+		provisioner.Close()
+	}
 	log.Println("server stopped")
+}
+
+// buildProviderRegistry creates a provider registry from environment variables.
+func buildProviderRegistry() *provider.Registry {
+	registry := provider.NewRegistry()
+
+	if key := os.Getenv("PROVIDER_A_KEY"); key != "" {
+		registry.Register(providera.New(key))
+		log.Printf("provisioner: registered provider vast.ai")
+	}
+	if clientID, clientSecret := os.Getenv("PROVIDER_B_ID"), os.Getenv("PROVIDER_B_SECRET"); clientID != "" && clientSecret != "" {
+		registry.Register(providerb.New(clientID, clientSecret))
+		log.Printf("provisioner: registered provider providerb")
+	}
+	if key := os.Getenv("PROVIDER_C_KEY"); key != "" {
+		registry.Register(providerc.New(key))
+		log.Printf("provisioner: registered provider providerc")
+	}
+
+	if len(registry.List()) == 0 {
+		log.Printf("provisioner: WARNING: no providers configured (set PROVIDER_A_KEY, PROVIDER_B_ID/SECRET, or PROVIDER_C_KEY)")
+	}
+
+	return registry
 }
