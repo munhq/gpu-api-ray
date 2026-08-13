@@ -23,8 +23,11 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot write to the pre-existing org package (it is
+          # linked to the repo this service was split out of). GHCR_TOKEN is an
+          # org-owner token with write:packages.
+          username: darkkraft
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
