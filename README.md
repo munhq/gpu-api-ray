@@ -2,6 +2,8 @@
 
 REST API for submitting batch inference jobs to a persistent vLLM instance running on a KubeRay RayService. Includes an embedded web dashboard for monitoring jobs in real time.
 
+The container image is `ghcr.io/munhq/gpu-api`. The Kubernetes platform that deploys it — Ansible, ArgoCD and the Helm chart — lives in [munhq/kubernetes_gpu](https://github.com/munhq/kubernetes_gpu).
+
 ## How it works
 
 1. Accepts batch inference requests via `POST /v1/batches`
