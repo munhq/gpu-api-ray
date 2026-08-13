@@ -2,15 +2,11 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Copy shared module first (replace directive: internal/provider)
-COPY pkg/provider/ /app/pkg/provider/
-
-# Copy gpu-api module
-COPY gpu-api/go.mod gpu-api/go.sum /app/gpu-api/
-WORKDIR /app/gpu-api
+COPY go.mod go.sum ./
 RUN go mod download
 
-COPY gpu-api/*.go gpu-api/*.html /app/gpu-api/
+COPY *.go *.html ./
+COPY pkg/ ./pkg/
 
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o gpu-api .
 
@@ -20,7 +16,7 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
 
-COPY --from=builder /app/gpu-api/gpu-api .
+COPY --from=builder /app/gpu-api .
 
 EXPOSE 8000
 
