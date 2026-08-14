@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/gpu-api
+  IMAGE_NAME: ${{ github.repository_owner }}/gpu-api-ray
 
 jobs:
   build:
