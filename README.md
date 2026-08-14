@@ -1,8 +1,10 @@
-# GPU API
+# GPU API (Ray)
 
 REST API for submitting batch inference jobs to a persistent vLLM instance running on a KubeRay RayService. Includes an embedded web dashboard for monitoring jobs in real time.
 
-The container image is `ghcr.io/munhq/gpu-api`. The Kubernetes platform that deploys it — Ansible, ArgoCD and the Helm chart — lives in [munhq/kubernetes_gpu](https://github.com/munhq/kubernetes_gpu).
+This is the Ray-based generation of the API: it routes every request to a Ray Serve endpoint and keeps job state in Dragonfly. A later generation replaced Ray with direct vLLM workers on provisioned GPU nodes.
+
+The container image is `ghcr.io/munhq/gpu-api-ray`. The Kubernetes platform that deploys it — Ansible, ArgoCD and the Helm chart — lives in [munhq/kubernetes_gpu](https://github.com/munhq/kubernetes_gpu).
 
 ## How it works
 
@@ -85,7 +87,7 @@ go build -o gpu-api .
 docker build -t gpu-api .
 ```
 
-Image is built automatically via GitHub Actions on push to `main` (triggered by changes in `gpu-api/`). Published to `ghcr.io/munhq/gpu-api:latest`.
+Image is built automatically via GitHub Actions on push to `main`. Published to `ghcr.io/munhq/gpu-api-ray:latest`.
 
 ## Load Testing
 
