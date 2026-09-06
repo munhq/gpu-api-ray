@@ -2,7 +2,7 @@
 
 REST API for submitting batch inference jobs to a persistent vLLM instance running on a KubeRay RayService. Includes an embedded web dashboard for monitoring jobs in real time.
 
-This is the Ray-based generation of the API: it routes every request to a Ray Serve endpoint and keeps job state in Dragonfly. A later generation replaced Ray with direct vLLM workers on provisioned GPU nodes.
+It routes every request to a Ray Serve endpoint and keeps job state in Dragonfly.
 
 The container image is `ghcr.io/munhq/gpu-api-ray`. The Kubernetes platform that deploys it — Ansible, ArgoCD and the Helm chart — lives in [munhq/kubernetes_gpu](https://github.com/munhq/kubernetes_gpu).
 
@@ -98,3 +98,7 @@ kubectl port-forward svc/gpu-api -n gpu-workloads 8000:8000
 # Run 99-job load test
 GPU_API_KEY=<key> python3 scripts/test_gpu_api_load.py
 ```
+
+## Licence
+
+Apache-2.0. See [LICENSE](LICENSE).

@@ -70,53 +70,6 @@ var (
 		Name: "gpu_api_jobs_submitted_by_priority_total",
 		Help: "Total jobs submitted broken down by priority level.",
 	}, []string{"priority"})
-
-	chatRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "gpu_api_chat_requests_total",
-		Help: "Total chat completion requests by model.",
-	}, []string{"model"})
-
-	activeSessions = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "gpu_api_active_sessions",
-		Help: "Number of active chat sessions.",
-	})
-
-	activeRequestsByModel = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gpu_api_active_requests_by_model",
-		Help: "Number of in-flight chat requests per model (used by KEDA for scaling).",
-	}, []string{"model"})
-
-	chatInferenceDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "gpu_api_chat_inference_duration_seconds",
-		Help:    "Chat completion inference latency in seconds.",
-		Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120},
-	}, []string{"model"})
-
-	queuedRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "gpu_api_queued_requests_total",
-		Help: "Total requests that were queued (model not immediately available).",
-	}, []string{"model"})
-
-	queuedRequestsActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gpu_api_queued_requests_active",
-		Help: "Number of currently queued requests waiting for capacity.",
-	}, []string{"model"})
-
-	provisioningDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "gpu_api_provisioning_duration_seconds",
-		Help:    "Time from provisioning start to model ready.",
-		Buckets: []float64{30, 60, 90, 120, 180, 240, 300, 600},
-	}, []string{"model"})
-
-	provisioningActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gpu_api_provisioning_active",
-		Help: "Whether an instance is currently active for a model (1=active, 0=none).",
-	}, []string{"model"})
-
-	provisioningFailures = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "gpu_api_provisioning_failures_total",
-		Help: "Total provisioning failures by model.",
-	}, []string{"model"})
 )
 
 type statusRecorder struct {
@@ -135,14 +88,6 @@ func normalizeRoute(path string) string {
 	// /v1/batches/{anything} → /v1/batches/{job_id}
 	if strings.HasPrefix(path, "/v1/batches/") {
 		return "/v1/batches/{job_id}"
-	}
-	// /v1/sessions/{anything} → /v1/sessions/{session_id}
-	if strings.HasPrefix(path, "/v1/sessions/") {
-		return "/v1/sessions/{session_id}"
-	}
-	// /v1/requests/{anything} → /v1/requests/{request_id}
-	if strings.HasPrefix(path, "/v1/requests/") {
-		return "/v1/requests/{request_id}"
 	}
 	return path
 }

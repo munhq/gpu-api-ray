@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Refuse to commit a private client, identity or infrastructure name.
+#
+# WHY THIS IS A HOOK AND NOT ONLY A TEST
+#
+# The names that leaked into this public repo were not typed by the maintainer.
+# They were written by AI agents working in this repo, in prose ABOUT the live
+# data: a migration comment enumerating the GitHub owners actually present in
+# the database, an MCP tool description using a real project as its example, a
+# test fixture built from a real directory layout. An agent reaches for what it
+# can see, and what it can see is the operator's whole cross-client index.
+#
+# A test in the suite does not stop that. It stops it only if someone runs the
+# suite before pushing, and the agent that wrote the comment had no reason to.
+# So the check runs at commit time, for every author, human or not.
+#
+# [infra] was added on 2026-08-31, after a hosting plan naming an internal
+# Keycloak host, the cluster it runs on and its database namespace was committed
+# to a public repo and pushed. The list had clients, an identity and side
+# projects. It had no tier for infrastructure, so the hook passed it, and a
+# force-push does not un-publish anything. [infra] is enforced everywhere, like
+# [client].
+#
+# THE LIST IS NOT IN THIS FILE. It lives outside every repository, because a
+# guard that names what it hides publishes what it hides. See:
+#   $XDG_CONFIG_HOME/chat-recall/private-names.txt  (or ~/.config/...)
+#
+# Bypass, if a match is ever a genuine false positive:
+#   git commit --no-verify        (then add a boundary-safe form to the list)
+set -uo pipefail
+
+home="${XDG_CONFIG_HOME:-$HOME/.config}"
+list=""
+for p in "$home/chat-recall/private-names.txt" "$(git rev-parse --show-toplevel)/.private-names"; do
+  [ -r "$p" ] && { list="$p"; break; }
+done
+
+if [ -z "$list" ] && [ -z "${CHAT_RECALL_PRIVATE_NAMES:-}" ]; then
+  # Absent list is NOT a silent pass. A contributor without the list gets a
+  # warning; the maintainer who has lost theirs gets told so before publishing.
+  echo "pre-commit: no private-name list found — name check SKIPPED" >&2
+  exit 0
+fi
+
+# TIERS ARE HONOURED, because the list defines them and this used to ignore them.
+#
+# The list separates [client] and [identity] — which must appear NOWHERE — from
+# [own], the operator's other side projects, which its own header says are
+# "harmless in the public repo's own test fixtures" and are to be "checked for
+# images and site text only". This script stripped every heading and enforced all
+# three against source, so a commit touching any line containing the name of a
+# SHIPPED FEATURE was refused: `codeindex` is an [own] entry and also a
+# documented companion binary appearing 72 times in cli.ts. A guard that blocks
+# routine work on a false positive gets bypassed with --no-verify, and then it
+# guards nothing. [client] and [identity] still fail, everywhere.
+tier_names() {
+  # $1 = tier heading to collect, e.g. client. Stops at the next heading.
+  awk -v want="[$1]" '
+    /^\[/ { collecting = ($0 == want); next }
+    collecting && !/^[[:space:]]*(#|$)/ { gsub(/[[:space:]]+$/, ""); if (length) print }
+  ' "$2"
+}
+
+if [ -n "${CHAT_RECALL_PRIVATE_NAMES:-}" ]; then
+  # An explicit override is treated as [client]: strictest, everywhere.
+  names=$(printf '%s\n' "$CHAT_RECALL_PRIVATE_NAMES" | tr ',' '\n' \
+          | sed 's/[[:space:]]*$//' | grep -v '^$' | paste -sd '|' -)
+  own_names=""
+else
+  names=$( { tier_names client "$list"; tier_names identity "$list"; \
+             tier_names infra "$list"; } \
+           | grep -v '^$' | paste -sd '|' - )
+  # [own] is "the operator's OTHER side projects". The repo's own name is on the
+  # list too (it is a side project), and a README that never says its own name
+  # is not a README, so it is dropped here. Found by refusing a codeindex README
+  # line that said "codeindex".
+  self_name=$(basename "$(git rev-parse --show-toplevel)")
+  own_names=$(tier_names own "$list" | grep -v '^$' | grep -vixF -- "$self_name" | paste -sd '|' -)
+fi
+[ -n "$names" ] || [ -n "$own_names" ] || exit 0
+
+# [own] applies to what a stranger LOOKS at, not to source: images shipped in the
+# repo and the prose that markets it. A dashboard screenshot listing every side
+# project tells a visitor what else the operator runs; a test fixture does not.
+own_paths='^(docs/media/|\.local/.*shots|.*\.(png|jpe?g|webp|gif|svg)$|README\.md$)'
+if [ -n "$own_names" ]; then
+  own_hits=$(git diff --cached --name-only --diff-filter=ACMR \
+             | grep -E "$own_paths" || true)
+  for f in $own_hits; do
+    if git diff --cached --unified=0 --no-color -- "$f" 2>/dev/null \
+       | grep -E '^\+' | grep -viE '^\+\+\+' | grep -qiE "\\b($own_names)\\b"; then
+      echo "" >&2
+      echo "COMMIT REFUSED — a private project name appears in a published surface:" >&2
+      echo "  $f" >&2
+      echo "" >&2
+      echo "Marketing imagery and the README must not name the operator's other" >&2
+      echo "projects. Checked against $list" >&2
+      exit 1
+    fi
+  done
+fi
+[ -n "$names" ] || exit 0
+
+# Staged content only, and only the added lines: fast, and it never complains
+# about a name that some older commit already carries.
+hits=$(git diff --cached --unified=0 --no-color --diff-filter=ACMR \
+       | grep -nE '^\+' | grep -viE '^\+\+\+' \
+       | grep -iE "\\b($names)\\b" || true)
+
+if [ -n "$hits" ]; then
+  # Print WHICH FILES, never the matching text: a terminal scrollback and a CI
+  # log are both places the name should not be repeated.
+  files=$(git diff --cached --name-only --diff-filter=ACMR | while read -r f
+          do git diff --cached --unified=0 --no-color -- "$f" \
+             | grep -E '^\+' | grep -viE '^\+\+\+' \
+             | grep -qiE "\\b($names)\\b" && echo "  $f"; done)
+  cat >&2 <<MSG
+
+COMMIT REFUSED — a private name appears in the staged changes.
+
+$files
+
+This repository is PUBLIC. Use "acme" or "example" for illustrative names, and
+never the project, client or account you happen to have open. Checked against
+$list
+
+MSG
+  exit 1
+fi
+exit 0
