@@ -6,11 +6,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY *.go *.html ./
-COPY pkg/ ./pkg/
 
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o gpu-api .
 
 FROM alpine:latest
+
+# Binds the GHCR package to this repository, so the package page links back here
+# and no other repository can claim the name.
+LABEL org.opencontainers.image.source="https://github.com/munhq/gpu-api-ray"
 
 RUN apk --no-cache add ca-certificates
 
