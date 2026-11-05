@@ -61,13 +61,13 @@
   "validation": [
     {
       "name": "format",
-      "command": "test -z \"$(gofmt -l .)\"",
+      "command": "files=$(gofmt -l .) || exit 1; test -z \"$files\"",
       "stage": "land"
     },
     {
       "name": "lint",
       "command": "go vet ./...",
-      "stage": "land"
+      "stage": "main"
     },
     {
       "name": "root",
