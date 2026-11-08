@@ -36,7 +36,7 @@ type Job struct {
 type JobQueue struct {
 	mu    sync.Mutex
 	ray   *RayClient
-	store *JobStore // nil if Redis unavailable
+	store *JobStore       // nil if Redis unavailable
 	jobs  map[string]*Job // only active (running) jobs
 	ctx   context.Context
 }
