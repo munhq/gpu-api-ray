@@ -5,5 +5,26 @@
   "server": {
     "url": "https://desk.munhq.com",
     "tokenEnv": "DESK_TOKEN"
-  }
+  },
+  "validation": [
+    {
+      "name": "gofmt",
+      "command": "test -z \"$(gofmt -l .)\"",
+      "stage": "land",
+      "paths": [
+        "**/*.go",
+        "go.mod"
+      ]
+    },
+    {
+      "name": "vet",
+      "command": "go vet ./...",
+      "stage": "main",
+      "paths": [
+        "**/*.go",
+        "go.mod",
+        "go.sum"
+      ]
+    }
+  ]
 }
