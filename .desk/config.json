@@ -26,5 +26,9 @@
         "go.sum"
       ]
     }
+  ],
+  "preLand": [
+    "test -z \"$(gofmt -l .)\"",
+    "go vet ./..."
   ]
 }
