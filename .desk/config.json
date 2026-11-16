@@ -8,27 +8,35 @@
   },
   "validation": [
     {
-      "name": "gofmt",
-      "command": "test -z \"$(gofmt -l .)\"",
-      "stage": "land",
-      "paths": [
-        "**/*.go",
-        "go.mod"
-      ]
-    },
-    {
-      "name": "vet",
-      "command": "go vet ./...",
-      "stage": "main",
+      "name": "go",
+      "command": "DESK_BUCK_TOOLCHAIN=\"go $(go version)\" sh .desk/workflows/buck-base/scripts/buck-run.sh build //:check",
+      "timeoutMinutes": 15,
       "paths": [
         "**/*.go",
         "go.mod",
-        "go.sum"
+        "go.sum",
+        "BUCK",
+        ".buckconfig",
+        ".desk/config.json"
       ]
     }
   ],
   "preLand": [
     "test -z \"$(gofmt -l .)\"",
     "go vet ./..."
+  ],
+  "checkouts": [
+    {
+      "repo": "munhq/desk",
+      "path": ".desk/workflows/buck-base",
+      "at": 609,
+      "subpath": "workflows/buck-base"
+    },
+    {
+      "repo": "munhq/desk",
+      "path": ".desk/workflows/buck-node",
+      "at": 609,
+      "subpath": "workflows/buck-node"
+    }
   ]
 }
